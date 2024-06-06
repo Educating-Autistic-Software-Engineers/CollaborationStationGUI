@@ -1,0 +1,30 @@
+html,
+body,
+.topheader {
+    /* probably unecessary, transitional until layout is refactored */
+    width: 100%; 
+    margin: 0;
+
+    /* Setting min height/width makes the UI scroll below those sizes */
+    min-width: 1024px;
+    height: 100vh;
+
+    flex-direction: column;
+    display: flex;
+}
+
+.app {
+    flex: 1;
+}
+
+.overlay {
+    pointer-events: none;
+    visibility: hidden;
+}
+
+.cursor {
+    visibility: visible;
+}
+
+/* @todo: move globally? Safe / side FX, for blocks particularly? */
+* { box-sizing: border-box; }

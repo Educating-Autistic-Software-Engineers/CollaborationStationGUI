@@ -1,0 +1,17 @@
+[
+  {
+    "id": "gui.theme.default",
+    "description": "label for original theme",
+    "defaultMessage": "Original"
+  },
+  {
+    "id": "gui.theme.dark",
+    "description": "label for dark mode theme",
+    "defaultMessage": "Dark"
+  },
+  {
+    "id": "gui.theme.highContrast",
+    "description": "label for high theme",
+    "defaultMessage": "High Contrast"
+  }
+]
