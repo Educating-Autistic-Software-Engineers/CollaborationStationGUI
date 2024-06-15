@@ -432,7 +432,7 @@ class MenuBar extends React.Component {
                                     [styles.clickable]: typeof this.props.onClickLogo !== 'undefined'
                                 })}
                                 draggable={false}
-                                src={require("./CollabStation.svg")}
+                                src={require("./logo.svg")}
                                 onClick={this.props.onClickLogo}
                             />
                         </div>
@@ -614,7 +614,7 @@ class MenuBar extends React.Component {
                             </div>
                         )}
                     </div>
-                    {this.props.canEditTitle ? (
+                    {false ? (
                         <div className={classNames(styles.menuBarItem, styles.growable)}>
                             <MenuBarItemTooltip
                                 enable
@@ -625,7 +625,7 @@ class MenuBar extends React.Component {
                                 />
                             </MenuBarItemTooltip>
                         </div>
-                    ) : ((this.props.authorUsername && this.props.authorUsername !== this.props.username) ? (
+                    ) : ((false && this.props.authorUsername && this.props.authorUsername !== this.props.username) ? (
                         <AuthorInfo
                             className={styles.authorInfo}
                             imageUrl={this.props.authorThumbnailUrl}
@@ -635,7 +635,7 @@ class MenuBar extends React.Component {
                         />
                     ) : null)}
                     <div className={classNames(styles.menuBarItem)}>
-                        {this.props.canShare ? (
+                        {false ? (
                             (this.props.isShowingProject || this.props.isUpdating) && (
                                 <ProjectWatcher onDoneUpdating={this.props.onSeeCommunity}>
                                     {
@@ -654,16 +654,16 @@ class MenuBar extends React.Component {
                                 </ProjectWatcher>
                             )
                         ) : (
-                            this.props.showComingSoon ? (
+                            false ? (
                                 <MenuBarItemTooltip id="share-button">
                                     <ShareButton className={styles.menuBarButton} />
                                 </MenuBarItemTooltip>
                             ) : []
                         )}
-                        {this.props.canRemix ? remixButton : []}
+                        {false ? remixButton : []}
                     </div>
                     <div className={classNames(styles.menuBarItem, styles.communityButtonWrapper)}>
-                        {this.props.enableCommunity ? (
+                        {false ? (
                             (this.props.isShowingProject || this.props.isUpdating) && (
                                 <ProjectWatcher onDoneUpdating={this.props.onSeeCommunity}>
                                     {
@@ -680,7 +680,7 @@ class MenuBar extends React.Component {
                                     }
                                 </ProjectWatcher>
                             )
-                        ) : (this.props.showComingSoon ? (
+                        ) : (false ? (
                             <MenuBarItemTooltip id="community-button">
                                 <CommunityButton className={styles.menuBarButton} />
                             </MenuBarItemTooltip>

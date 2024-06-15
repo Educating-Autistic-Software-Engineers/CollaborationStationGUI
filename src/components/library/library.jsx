@@ -30,6 +30,8 @@ const ALL_TAG = {tag: 'all', intlLabel: messages.allTag};
 const tagListPrefix = [ALL_TAG];
 
 class LibraryComponent extends React.Component {
+    static costumeIdsToData = [];
+
     constructor (props) {
         super(props);
         bindAll(this, [
@@ -49,6 +51,7 @@ class LibraryComponent extends React.Component {
             selectedTag: ALL_TAG.tag,
             loaded: false
         };
+        this.getFilteredData();
     }
     componentDidMount () {
         // Allow the spinner to display before loading the content
@@ -65,7 +68,11 @@ class LibraryComponent extends React.Component {
     }
     handleSelect (id) {
         this.handleClose();
+        selectItemWithFunc(this.props.onItemSelected, id);
         this.props.onItemSelected(this.getFilteredData()[id]);
+    }
+    static selectItemWithFunc(func, id) {
+        CostumeLibrary.handleItemSelectedWithVM(this.props.vm, func(id));
     }
     handleClose () {
         this.props.onRequestClose();
@@ -144,12 +151,13 @@ class LibraryComponent extends React.Component {
                     .indexOf(this.state.filterQuery.toLowerCase()) !== -1
             ));
         }
-        return this.props.data.filter(dataItem => (
+        LibraryComponent.costumeIdsToData = this.props.data.filter(dataItem => (
             dataItem.tags &&
             dataItem.tags
                 .map(String.prototype.toLowerCase.call, String.prototype.toLowerCase)
                 .indexOf(this.state.selectedTag) !== -1
         ));
+        return LibraryComponent.costumeIdsToData;
     }
     scrollToTop () {
         this.filteredDataRef.scrollTop = 0;

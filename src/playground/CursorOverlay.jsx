@@ -49,7 +49,6 @@ const CursorOverlay = ({ spaces }) => {
     return (
         <div id="live-cursors" ref={liveCursors} className={styles.app}>
             <ConditionalApp/>
-            <YourCursor self={self} parentRef={liveCursors} className={styles.overlay} />
             
         </div>
     );

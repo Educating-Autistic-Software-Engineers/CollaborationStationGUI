@@ -39,7 +39,7 @@
   "dependencies": {
     "@ably/spaces": "^0.3.1",
     "@microbit/microbit-universal-hex": "^0.2.2",
-    "ably": "^1.2.49",
+    "ably": "^1.2.50",
     "arraybuffer-loader": "^1.0.6",
     "autoprefixer": "^9.0.1",
     "aws-sdk": "^2.1634.0",

@@ -4,14 +4,28 @@ import React from 'react';
 import {injectIntl} from 'react-intl';
 
 import LibraryItemComponent from '../components/library-item/library-item.jsx';
-import {ablyInstance} from "../utils/AblyHandlers.jsx";
+import {ablySpace, ablyInstance} from "../utils/AblyHandlers.jsx";
+import { a } from 'bowser';
 
-const channel = ablyInstance.channels.get('blocks');
+const channel = ablyInstance.channels.get(ablySpace);
 
 let hasInited = false;
 let blockEmission = false;
 
+/*
+await channel.subscribe('onSelect', (message) => clickId(message));
+function clickId(msg) {
+    const data = JSON.parse(msg.data);
+    let onum = data.num;
+    console.log(onum);
+    //this.props.onSelect(onum);
+}
+    */
+let libraryIndex = 0;
+
 class LibraryItem extends React.PureComponent {
+
+    
     constructor (props) {
         super(props);
         bindAll(this, [
@@ -31,6 +45,23 @@ class LibraryItem extends React.PureComponent {
             iconIndex: 0,
             isRotatingIcon: false
         };
+        this.ainit(); 
+    }
+    async ainit() {
+
+        //await channel.subscribe('onSelect', (message) => this.clickId(message));
+        libraryIndex++;
+        this.id = libraryIndex;
+    }
+    clickId(msg) {
+        const data = JSON.parse(msg.data);
+        if (this.id != data.index) {
+            return;
+        }
+        console.log(this.props)
+        let onum = data.num;
+        console.log(onum);
+        //this.props.onSelect(onum);
     }
     componentWillUnmount () {
 
@@ -44,7 +75,9 @@ class LibraryItem extends React.PureComponent {
         console.log(e)
         if (!this.props.disabled) {
             e.preventDefault();
-            await channel.publish('onSelect', JSON.stringify({'num':this.props.id}));
+            await channel.publish('onSelect', JSON.stringify(
+                {'num':this.props.id,'index':this.id}
+            ));
         }
     }
     handleFocus (id) {
@@ -116,6 +149,7 @@ class LibraryItem extends React.PureComponent {
         return iconMd5Prop;
     }
     render () {
+
         const iconMd5 = this.curIconMd5();
         const iconURL = iconMd5 ?
             `https://cdn.assets.scratch.mit.edu/internalapi/asset/${iconMd5}/get/` :

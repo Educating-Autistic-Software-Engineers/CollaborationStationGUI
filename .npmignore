@@ -1,0 +1,23 @@
+# Mac OS
+.DS_Store
+
+# NPM
+/node_modules
+npm-*
+
+# Double copies of all the static assets and tutorial gifs
+# We need these files for deep webpack builds
+# TODO: see if there's a good way to dedupe larger files
+#/src
+
+# Testing
+/.nyc_output
+/coverage
+/test
+
+# Build
+/.opt-in
+/build
+
+# generated translation files
+/translations

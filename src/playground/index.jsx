@@ -32,15 +32,9 @@ import ConditionalApp from '../components/ConditionalApp.jsx';
 
 const id = nanoid();
 const spaceName = getSpaceNameFromUrl()
-const client = new Realtime.Promise({
-    clientId: id,
-    key: secrets.ablySpaces,
-});
+const client = new Realtime.Promise({ authUrl: "https://p497lzzlxf.execute-api.us-east-2.amazonaws.com/Phase1/ably"});
 const spaces = new Spaces(client);
-const client2 = new Realtime({
-    clientId: id,
-    key: secrets.ablySpaces2,
-});
+const client2 = new Realtime({ authUrl: "https://p497lzzlxf.execute-api.us-east-2.amazonaws.com/Phase1/ably"});
 
 /*
 const space = await spaces.get("test");

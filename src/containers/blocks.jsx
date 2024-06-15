@@ -30,9 +30,10 @@ import {setConnectionModalExtensionId} from '../reducers/connection-modal';
 import {updateMetrics} from '../reducers/workspace-metrics';
 import {isTimeTravel2020} from '../reducers/time-travel';
 import {Realtime} from "ably";
+import Ably from 'ably';
 import { AblyProvider, useChannel, usePresence } from 'ably/react';
 import {nanoid} from 'nanoid';
-import {ablyInstance} from "../utils/AblyHandlers.jsx";
+import {ablySpace, ablyInstance} from "../utils/AblyHandlers.jsx";
 import s3 from '../utils/S3DataFetcher.jsx';
 import AWS from 'aws-sdk';
 //import s3Client from "@aws-sdk/client-s3";
@@ -43,6 +44,10 @@ import {
 } from '../reducers/editor-tab';
 import { c } from 'bowser';
 import { serializeHost } from 'scratch-storage';
+import LibraryComponent from '../components/library/library.jsx';
+
+let isTimeToSave = false;
+setInterval(() => {isTimeToSave = true;}, 6000); 
 
 const addFunctionListener = (object, property, callback) => {
     const oldFn = object[property];
@@ -69,6 +74,7 @@ const { connectionError, channelError } = useChannel({ channelName: 'blocks' }, 
 const s3Client = new AWS.S3();
 const nid = nanoid();
 const ably = ablyInstance;
+const channel = ably.channels.get(ablySpace);
 let hasInited = false;
 let flag1 = false;
 let flag2 = false;
@@ -320,9 +326,8 @@ class Blocks extends React.Component {
             this.idToAll = {};
             this.amountOfBlocks = 0;
 
-            const channel = ably.channels.get('blocks');
             await channel.subscribe('event', (message) => this.recieveInformation(message));
-            await channel.subscribe('onSelect', (message) => this.spriteOnSelect(message));
+            //await channel.subscribe('onSelect', (message) => this.spriteOnSelect(message));
         }
     }
 
@@ -339,21 +344,32 @@ class Blocks extends React.Component {
 
     async load() {
 
-        const params = {
-            Bucket: 'scratchblocks',
-            Key: 'data.json', // e.g., 'path/to/your/file.txt'
-        };
-
         try {
-            const data = await s3.getObject(params).promise();
-            const text = data.Body.toString('utf-8');
-            
-            const state = JSON.parse(text);
-            console.log(state)
-            this.props.vm.loadProject(state);
+            this.stopEmission = true;
+
+            //const decoder = 
+            const response = await fetch("https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/s3-storage",{
+                method: 'GET',
+            })
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder('utf-8');
+            let chunks = [];
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    break;
+                }
+                chunks.push(value);
+            }
+            const concatenated = new Uint8Array(chunks.reduce((acc, chunk) => acc.concat(Array.from(chunk)), []));
+            const jsonString = decoder.decode(concatenated);
+            const data = JSON.parse(jsonString);
+            this.props.vm.loadProject(data);
         } catch (error) {
             console.error('Error fetching data from S3:', error);
         }
+
+        this.stopEmission = false;
 
         return
         try {
@@ -383,21 +399,18 @@ class Blocks extends React.Component {
         }
     }
 
+    ret(){return 3;}
+
     async save(_event) {
 
-        const params = {
-            Bucket: 'scratchblocks',
-            Key: 'data.json',
-            Body: JSON.stringify(this.props.vm.toJSON()) 
-        }
+        const s = JSON.stringify(this.props.vm.toJSON())
         
-        s3Client.upload(params, (err, data) => {
-            if (err) {
-                console.error("erro ", err);
-            } else {
-                console.log("succ ", params.Body)
-            }
-        })
+        const response = await fetch('https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/s3-storage', {
+            method: 'POST',
+            body: s
+        });
+
+        console.log("response is ", response)
 
         return
 
@@ -435,8 +448,6 @@ class Blocks extends React.Component {
     // heavily edited from https://github.com/BlockliveScratch/Blocklive/blob/master/extension/scripts/editor.js#L834
     async sendInformation(eve) {
 
-        console.log("C", eve)
-
         if (this.stopEmission || this.holdingBlock) {return;}
 
         if ( !(eve.element == "click" || eve.element == "stackclick" || eve.element == "field") ) {
@@ -471,13 +482,14 @@ class Blocks extends React.Component {
 
         for (let queued_message of this.queue) {
             console.log(queued_message, "sent")
-            const channel = ably.channels.get('blocks');
             await channel.publish('event', JSON.stringify(queued_message));
         }
         console.log("equeue")
         this.queue.length = 0;
 
-        this.save.bind(this)(eve);
+        if (isTimeToSave) {
+            this.save.bind(this)(eve);
+        }
         
     }
 
@@ -500,15 +512,15 @@ class Blocks extends React.Component {
             }
         }
 
+        if (this.workspace.getBlockById(data.event.blockId) == null && data.event.type != "create") {
+            console.log(message, "discarded because block does not exist")
+            return;
+        }
+
         if (data.event.type == "create") {
             this.holdingBlock = true;
         } else if (data.event.type == "move") {
             this.holdingBlock = false;
-        }
-
-        if (this.workspace.getBlockById(data.event.blockId) == null && data.event.type != "create") {
-            console.log(message, "discarded because block does not exist")
-            return;
         }
 
         console.log(message, "recieved")

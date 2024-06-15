@@ -317,6 +317,7 @@ const GUIComponent = props => {
                                             stageSize={stageSize}
                                             theme={theme}
                                             vm={vm}
+                                            id="blocks"
                                         />
                                     </Box>
                                     <Box className={styles.extensionButtonContainer}>

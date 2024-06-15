@@ -3,8 +3,8 @@ import {secrets} from "./Secrets.jsx";
 
 // Configure the AWS SDK with your credentials and region
 AWS.config.update({
-  accessKeyId: secrets.publicAccessKey,
-  secretAccessKey: secrets.privateAccessKey,
+  // accessKeyId: secrets.publicAccessKey,
+  // secretAccessKey: secrets.privateAccessKey,
   region: "us-east-2",
 });
 

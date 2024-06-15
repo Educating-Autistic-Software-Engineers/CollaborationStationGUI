@@ -3,9 +3,11 @@ import PropTypes from 'prop-types';
 import React from 'react';
 import VM from 'scratch-vm';
 import {connect} from 'react-redux';
-import {ablyInstance} from "../utils/AblyHandlers.jsx";
+import {ablySpace, ablyInstance} from "../utils/AblyHandlers.jsx";
 
 import ControlsComponent from '../components/controls/controls.jsx';
+
+const channel = ablyInstance.channels.get(ablySpace);
 
 class Controls extends React.Component {
     constructor (props) {
@@ -17,17 +19,14 @@ class Controls extends React.Component {
         this.subscribe()
     }
     async subscribe() {
-        const channel = ablyInstance.channels.get('blocks');
         await channel.subscribe('greenclick', (message) => this.onGreenClick(message));
         await channel.subscribe('redclick', (message) => this.onRedClick(message));
     }
     async handleGreenFlagClick (e) {
         //console.log(e)
-        const channel = ablyInstance.channels.get('blocks');
         await channel.publish('greenclick', JSON.stringify(""));
     }
     async handleStopAllClick (e) {
-        const channel = ablyInstance.channels.get('blocks');
         await channel.publish('redclick', JSON.stringify(""));
     }
     

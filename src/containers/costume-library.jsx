@@ -25,6 +25,9 @@ class CostumeLibrary extends React.PureComponent {
         ]);
     }
     handleItemSelected (item) {
+        CostumeLibrary.handleItemSelectedWithVM(item, this.props.vm);
+    }
+    static handleItemSelectedWithVM (item, vm) {
         const vmCostume = {
             name: item.name,
             rotationCenterX: item.rotationCenterX,
@@ -32,7 +35,7 @@ class CostumeLibrary extends React.PureComponent {
             bitmapResolution: item.bitmapResolution,
             skinId: null
         };
-        this.props.vm.addCostumeFromLibrary(item.md5ext, vmCostume);
+        vm.addCostumeFromLibrary(item.md5ext, vmCostume);
     }
     render () {
         return (

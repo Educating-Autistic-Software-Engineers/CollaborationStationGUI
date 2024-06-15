@@ -9,7 +9,7 @@ import {STAGE_DISPLAY_SIZES} from '../lib/layout-constants';
 import {getEventXY} from '../lib/touch-utils';
 import VideoProvider from '../lib/video/video-provider';
 import {BitmapAdapter as V2BitmapAdapter} from 'scratch-svg-renderer';
-import {ablyInstance} from "../utils/AblyHandlers.jsx";
+import {ablySpace, ablyInstance} from "../utils/AblyHandlers.jsx";
 
 import StageComponent from '../components/stage/stage.jsx';
 
@@ -18,7 +18,7 @@ import {
     deactivateColorPicker
 } from '../reducers/color-picker';
 
-const channel = ablyInstance.channels.get('blocks');
+const channel = ablyInstance.channels.get(ablySpace);
 const colorPickerRadius = 20;
 const dragThreshold = 3; // Same as the block drag threshold
 
