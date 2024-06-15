@@ -348,8 +348,8 @@ class Blocks extends React.Component {
             this.stopEmission = true;
 
             //const decoder = 
-            const response = await fetch("https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/s3-storage",{
-                method: 'GET',
+            const response = await fetch("https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/s3-storage?space="+ablySpace,{
+                method: 'GET'
             })
             const reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8');
@@ -407,7 +407,7 @@ class Blocks extends React.Component {
         
         const response = await fetch('https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/s3-storage', {
             method: 'POST',
-            body: s
+            body: ablySpace+"~|@^|@|~"+s
         });
 
         console.log("response is ", response)
