@@ -46,10 +46,14 @@ const CursorOverlay = ({ spaces }) => {
     cursorUpdate(spaces);
     */
    
+    const queryString = window.location.search
+    const urlParams = new URLSearchParams(queryString)
+    let uname = urlParams.get('name')
+
     return (
         <div id="live-cursors" ref={liveCursors} className={styles.app}>
             <ConditionalApp/>
-            <YourCursor self={self} parentRef={liveCursors} className={styles.overlay} />
+            <YourCursor self={3} name={uname} className={styles.overlay} />
             <MemberCursors />
         </div>
     );

@@ -1,12 +1,17 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useRef } from "react";
 import { ablySpace, ablyInstance } from "../utils/AblyHandlers.jsx";
 import CursorSvg from "./CursorSvg.jsx";
 import styles from "./Cursors.module.css";
 
-const channel = ablyInstance.channels.get(ablySpace);
+let thisName
 
-const YourCursor = ({ self, parentRef }) => {
+const channel = ablyInstance.channels.get(ablySpace);
+const YourCursor = ({ self, name }) => {
     const [position, setPosition] = useState({ x: 0, y: 0 });
+    const latestPosition = useRef(position);
+    let cachedPosition = { x: 0, y: 0 };
+
+    thisName = name
 
     useEffect(() => {
         const handleMouseMove = (event) => {
@@ -15,34 +20,40 @@ const YourCursor = ({ self, parentRef }) => {
                 y: event.clientY
             };
             setPosition(newPosition);
-            channel.publish('cursor', JSON.stringify(newPosition));
+            latestPosition.current = newPosition;
         };
 
         window.addEventListener('mousemove', handleMouseMove);
 
-        // Cleanup the event listener on component unmount
+        const intervalId = setInterval(() => {
+            if (JSON.stringify(cachedPosition) === JSON.stringify(latestPosition.current)) return;
+            cachedPosition = latestPosition.current;
+            channel.publish('cursor', JSON.stringify({ clientId: name, position: latestPosition.current }));
+        }, 200);
+
+        // Cleanup the event listener and interval on component unmount
         return () => {
             window.removeEventListener('mousemove', handleMouseMove);
+            clearInterval(intervalId);
         };
-    }, []);
+    }, [self]);
 
     const cursorColor = "#FF0000";
 
-    return <div></div>
-    // return (
-    //     <div
-    //         className={styles.cursor}
-    //         style={{
-    //             top: `${position.y}px`,
-    //             left: `${position.x}px`,
-    //         }}
-    //     >
-    //         <CursorSvg cursorColor={cursorColor} />
-    //         <div style={{ backgroundColor: cursorColor }} className={styles.cursorName}>
-    //             You
-    //         </div>
-    //     </div>
-    // );
+    return (
+        <div
+            className={styles.cursor}
+            style={{
+                top: `${position.y}px`,
+                left: `${position.x}px`,
+            }}
+        >
+            <CursorSvg cursorColor={cursorColor} />
+            <div style={{ backgroundColor: cursorColor }} className={styles.cursorName}>
+                You
+            </div>
+        </div>
+    );
 };
 
 const MemberCursors = () => {
@@ -50,8 +61,8 @@ const MemberCursors = () => {
 
     useEffect(() => {
         const handleCursorMessage = (message) => {
-            const { clientId, data } = message;
-            const position = JSON.parse(data);
+            const { clientId, position } = JSON.parse(message.data);
+            if (clientId === thisName) return;
             setCursors(prevCursors => ({
                 ...prevCursors,
                 [clientId]: { position, cursorColor: "#00FF00", name: clientId }
