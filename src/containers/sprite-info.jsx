@@ -4,6 +4,10 @@ import React from 'react';
 
 import SpriteInfoComponent from '../components/sprite-info/sprite-info.jsx';
 
+import { ablyInstance, ablySpace } from '../utils/AblyHandlers.jsx';
+
+const ablyChannel = ablyInstance.channels.get(ablySpace);
+
 class SpriteInfo extends React.Component {
     constructor (props) {
         super(props);
@@ -11,14 +15,17 @@ class SpriteInfo extends React.Component {
             'handleClickVisible',
             'handleClickNotVisible'
         ]);
+        ablyChannel.subscribe('changeVisibility', (message) => {
+            this.props.onChangeVisibility(JSON.parse(message.data));
+        })
     }
     handleClickVisible (e) {
         e.preventDefault();
-        this.props.onChangeVisibility(true);
+        ablyChannel.publish('changeVisibility', JSON.stringify(true));
     }
     handleClickNotVisible (e) {
         e.preventDefault();
-        this.props.onChangeVisibility(false);
+        ablyChannel.publish('changeVisibility', JSON.stringify(false));
     }
     render () {
         return (

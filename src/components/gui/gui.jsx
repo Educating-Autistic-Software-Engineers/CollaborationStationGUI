@@ -143,8 +143,11 @@ const GUIComponent = props => {
         isRendererSupported = Renderer.isSupported();
     }
 
+
+
     return (<MediaQuery minWidth={layout.fullSizeMinWidth}>{isFullSize => {
         const stageSize = resolveStageSize(stageSizeMode, isFullSize);
+        console.log('stageSize', stageSize)
 
         return isPlayerOnly ? (
             <StageWrapper
@@ -318,6 +321,7 @@ const GUIComponent = props => {
                                             theme={theme}
                                             vm={vm}
                                             id="blocks"
+                                            onActivateBlockTab={onActivateTab}
                                         />
                                     </Box>
                                     <Box className={styles.extensionButtonContainer}>

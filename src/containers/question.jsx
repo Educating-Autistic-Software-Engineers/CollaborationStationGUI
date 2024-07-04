@@ -3,6 +3,9 @@ import React from 'react';
 import bindAll from 'lodash.bindall';
 import QuestionComponent from '../components/question/question.jsx';
 
+import {ablyInstance, ablySpace} from '../utils/AblyHandlers.jsx';
+const ablyChannel = ablyInstance.channels.get(ablySpace);
+
 class Question extends React.Component {
     constructor (props) {
         super(props);
@@ -14,15 +17,21 @@ class Question extends React.Component {
         this.state = {
             answer: ''
         };
+        ablyChannel.subscribe('changeAnswer', (message) => {
+            this.setState({answer: JSON.parse(message.data)});
+        });
+        ablyChannel.subscribe('submitAnswer', (message) => {
+            this.props.onQuestionAnswered(JSON.parse(message.data));
+        });
     }
     handleChange (e) {
-        this.setState({answer: e.target.value});
+        ablyChannel.publish('changeAnswer', JSON.stringify(e.target.value));
     }
     handleKeyPress (event) {
         if (event.key === 'Enter') this.handleSubmit();
     }
     handleSubmit () {
-        this.props.onQuestionAnswered(this.state.answer);
+        ablyChannel.publish('submitAnswer', JSON.stringify(this.state.answer));
     }
     render () {
         return (

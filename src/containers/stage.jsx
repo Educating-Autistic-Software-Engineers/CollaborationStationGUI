@@ -106,8 +106,8 @@ class Stage extends React.Component {
         this.setState({question: question});
     }
     handleQuestionAnswered (answer) {
-        this.setState({question: null}, () => {
-            this.props.vm.runtime.emit('ANSWER', answer);
+        this.setState({question: null}, async () => {
+            await this.props.vm.runtime.emit('ANSWER', answer);
         });
     }
     startColorPickingLoop () {
@@ -165,20 +165,20 @@ class Stage extends React.Component {
         return JSON.stringify(obj, null, 2);
     }
     async attachMouseEvents (canvas) {
-        await channel.subscribe('mouseup', (message) => this.onMouseUp(JSON.parse(message.data)));
-        await channel.subscribe('touchend', (message) => this.onMouseUp(JSON.parse(message.data)));
-        await channel.subscribe('mousedown', (message) => this.onMouseDown(JSON.parse(message.data)));
-        await channel.subscribe('touchstart', (message) => this.onMouseDown(JSON.parse(message.data)));
-        document.addEventListener('mouseup', async (e) => {await channel.publish('mouseup', this.stringifyMouseEvent(e))});
-        document.addEventListener('touchend', async (e) => {await channel.publish('touchend', this.stringifyMouseEvent(e))});
-        canvas.addEventListener('mousedown', async (e) => {await channel.publish('mousedown', this.stringifyMouseEvent(e))});
-        canvas.addEventListener('touchstart', async (e) => {await channel.publish('touchstart', this.stringifyMouseEvent(e))});
+        // await channel.subscribe('mouseup', (message) => this.onMouseUp(JSON.parse(message.data)));
+        // await channel.subscribe('touchend', (message) => this.onMouseUp(JSON.parse(message.data)));
+        // await channel.subscribe('mousedown', (message) => this.onMouseDown(JSON.parse(message.data)));
+        // await channel.subscribe('touchstart', (message) => this.onMouseDown(JSON.parse(message.data)));
+        // document.addEventListener('mouseup', async (e) => {await channel.publish('mouseup', this.stringifyMouseEvent(e))});
+        // document.addEventListener('touchend', async (e) => {await channel.publish('touchend', this.stringifyMouseEvent(e))});
+        // canvas.addEventListener('mousedown', async (e) => {await channel.publish('mousedown', this.stringifyMouseEvent(e))});
+        // canvas.addEventListener('touchstart', async (e) => {await channel.publish('touchstart', this.stringifyMouseEvent(e))});
         
-        this.miters = 0;
-        await channel.subscribe('mousemove', (message) => this.onMouseMove(message));
-        await channel.subscribe('touchmove', (message) => this.onMouseMove(message));
-        document.addEventListener('mousemove', async (e) => this.handleCursor(e));
-        document.addEventListener('touchmove', async (e) => this.handleCursor(e));
+        // this.miters = 0;
+        // await channel.subscribe('mousemove', (message) => this.onMouseMove(message));
+        // await channel.subscribe('touchmove', (message) => this.onMouseMove(message));
+        // document.addEventListener('mousemove', async (e) => this.handleCursor(e));
+        // document.addEventListener('touchmove', async (e) => this.handleCursor(e));
         
         /*
         await channel.subscribe('wheel', (message) => this.onWheel(message));
@@ -186,12 +186,12 @@ class Stage extends React.Component {
         canvas.addEventListener('wheel', async (e) => {await channel.publish('wheel', JSON.stringify(e))});
         */
 
-        //document.addEventListener('mousemove', this.onMouseMove);
-        //document.addEventListener('mouseup', this.onMouseUp);
-        //document.addEventListener('touchmove', this.onMouseMove);
-        //document.addEventListener('touchend', this.onMouseUp);
-        //canvas.addEventListener('mousedown', this.onMouseDown);
-        //canvas.addEventListener('touchstart', this.onMouseDown);
+        document.addEventListener('mousemove', this.onMouseMove);
+        document.addEventListener('mouseup', this.onMouseUp);
+        document.addEventListener('touchmove', this.onMouseMove);
+        document.addEventListener('touchend', this.onMouseUp);
+        canvas.addEventListener('mousedown', this.onMouseDown);
+        canvas.addEventListener('touchstart', this.onMouseDown);
         canvas.addEventListener('wheel', this.onWheel);
     }
     detachMouseEvents (canvas) {

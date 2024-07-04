@@ -10,8 +10,11 @@ import VM from 'scratch-vm';
 import getCostumeUrl from '../lib/get-costume-url';
 import DragRecognizer from '../lib/drag-recognizer';
 import {getEventXY} from '../lib/touch-utils';
+import { ablyInstance, ablySpace } from '../utils/AblyHandlers.jsx';
 
 import SpriteSelectorItemComponent from '../components/sprite-selector-item/sprite-selector-item.jsx';
+
+const channel = ablyInstance.channels.get(ablySpace);
 
 class SpriteSelectorItem extends React.PureComponent {
     constructor (props) {
@@ -35,6 +38,8 @@ class SpriteSelectorItem extends React.PureComponent {
             onDrag: this.handleDrag,
             onDragEnd: this.handleDragEnd
         });
+
+        //channel.subscribe('deleteSprite', this.deleteSprite.bind(this));
     }
     componentDidMount () {
         document.addEventListener('touchend', this.handleTouchEnd);

@@ -192,6 +192,7 @@ export default function (vm, useCatBlocks) {
             [random, '_random_'],
             [mouse, '_mouse_']
         ]);
+        //console.log("WHAT IS THIS", json)
         this.jsonInit(json);
     };
 

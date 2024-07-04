@@ -1,11 +1,21 @@
 import React, { useEffect, useState, useRef } from "react";
-import { ablySpace, ablyInstance } from "../utils/AblyHandlers.jsx";
+import { ablySpace, ablyInstance, cursorColor } from "../utils/AblyHandlers.jsx";
 import CursorSvg from "./CursorSvg.jsx";
 import styles from "./Cursors.module.css";
+import { is } from "core-js/core/object";
 
 let thisName
 
+const cursorWidth =  90; // width of your cursor SVG
+const cursorHeight = 60; // height of your cursor SVG
+
 const channel = ablyInstance.channels.get(ablySpace);
+sessionStorage.setItem('blocksRect', JSON.stringify({x: 0, y: 0, right: 0, bottom: 0}))
+
+const clampPosition = (position, maxPosition, elementSize) => {
+    return Math.max(0, Math.min(position, maxPosition - elementSize));
+};
+
 const YourCursor = ({ self, name }) => {
     const [position, setPosition] = useState({ x: 0, y: 0 });
     const latestPosition = useRef(position);
@@ -26,9 +36,36 @@ const YourCursor = ({ self, name }) => {
         window.addEventListener('mousemove', handleMouseMove);
 
         const intervalId = setInterval(() => {
-            if (JSON.stringify(cachedPosition) === JSON.stringify(latestPosition.current)) return;
-            cachedPosition = latestPosition.current;
-            channel.publish('cursor', JSON.stringify({ clientId: name, position: latestPosition.current }));
+
+            const tabIndex = sessionStorage.getItem("activeTabIndex")
+            const blockRect = JSON.parse(sessionStorage.getItem('blocksRect'))
+            let isHovering = latestPosition.current.x < blockRect.right// && latestPosition.y > blockRect.y
+            if (Number(tabIndex) > 0.5) {
+                isHovering = false
+            }
+
+            //console.log(tabIndex)
+
+            //console.log(blockRect, latestPosition.current.x, blockRect.right, isHovering)
+
+            const dragPos = isHovering ? JSON.parse(sessionStorage.getItem("dragRelative")) : {x: 0, y: 0};
+            const globalPosition = {x: latestPosition.current.x - dragPos.x, y: latestPosition.current.y - dragPos.y};
+
+            if (JSON.stringify(cachedPosition) === JSON.stringify(globalPosition)) return;
+            cachedPosition = globalPosition;
+
+            //console.log(document.getElementById('totalsize').getBoundingClientRect());
+
+            channel.publish('cursor', JSON.stringify({ 
+                target: sessionStorage.getItem("editingTarget"), 
+                tabIndex: tabIndex,
+                clientId: name, 
+                position: globalPosition, 
+                hovering: isHovering,
+                color: cursorColor,
+                ogWindow: {innerWidth: window.innerWidth, innerHeight: window.innerHeight},
+                rect: sessionStorage.getItem("blocksRect")
+            }));
         }, 200);
 
         // Cleanup the event listener and interval on component unmount
@@ -38,14 +75,21 @@ const YourCursor = ({ self, name }) => {
         };
     }, [self]);
 
-    const cursorColor = "#FF0000";
+
+    // Get the viewport dimensions
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    // Clamp the positions
+    const clampedX = clampPosition(position.x, viewportWidth, cursorWidth);
+    const clampedY = clampPosition(position.y, viewportHeight, cursorHeight);
 
     return (
         <div
             className={styles.cursor}
             style={{
-                top: `${position.y}px`,
-                left: `${position.x}px`,
+                top: `${clampedY}px`,
+                left: `${clampedX}px`,
             }}
         >
             <CursorSvg cursorColor={cursorColor} />
@@ -56,16 +100,50 @@ const YourCursor = ({ self, name }) => {
     );
 };
 
+const hashCode = function(s) {
+    return s.split("").reduce(function(a, b) {
+        a = ((a << 5) - a) + b.charCodeAt(0);
+        return a & a;
+    }, 0);
+}
+
 const MemberCursors = () => {
     const [cursors, setCursors] = useState({});
 
     useEffect(() => {
         const handleCursorMessage = (message) => {
-            const { clientId, position } = JSON.parse(message.data);
+            const { clientId, position, hovering, target, color, tabIndex, ogWindow, rect } = JSON.parse(message.data);
             if (clientId === thisName) return;
+
+            const ogRect = JSON.parse(rect)
+            const blockRect = JSON.parse(sessionStorage.getItem('blocksRect'))
+
+            let isInvisible = false;
+            const dragOffset = JSON.parse(sessionStorage.getItem("dragRelative"))
+            const dragPos = hovering && !(position.x + dragOffset.x < 312) ? dragOffset : {x: 0, y: 0};
+            let relposition = { x: position.x + dragPos.x, y: position.y + dragPos.y};
+            //console.log('rel', relposition)
+
+            // top left is (312, 90)
+            //relposition.x < 312 || relposition.y < 90
+
+            if (hovering) {
+                if (relposition.x < blockRect.x || relposition.y < blockRect.y || relposition.x > blockRect.right || relposition.y > blockRect.bottom) {
+                    isInvisible = true;
+                }
+            } else {
+                const xScale = (window.innerWidth - blockRect.right)/(ogWindow.innerWidth - ogRect.right)
+                relposition.x = (relposition.x - ogRect.right) * xScale + blockRect.right
+            }
+
+            if (target != sessionStorage.getItem("editingTarget") || sessionStorage.getItem("activeTabIndex") != tabIndex) {
+                isInvisible = true;
+            }
+
+            const actualColor = isInvisible ? "#ffffff00" : color
             setCursors(prevCursors => ({
                 ...prevCursors,
-                [clientId]: { position, cursorColor: "#00FF00", name: clientId }
+                [clientId]: { relposition, cursorColor: actualColor, name: clientId }
             }));
         };
 
@@ -79,21 +157,32 @@ const MemberCursors = () => {
 
     return (
         <>
-            {Object.values(cursors).map((member, index) => (
-                <div
-                    key={index}
-                    className={styles.cursor}
-                    style={{
-                        top: `${member.position.y}px`,
-                        left: `${member.position.x}px`,
-                    }}
-                >
-                    <CursorSvg cursorColor={member.cursorColor} />
-                    <div style={{ backgroundColor: member.cursorColor }} className={styles.cursorName}>
-                        {member.name}
-                    </div>
+          {Object.values(cursors).map((member, index) => {
+    
+            // Get the viewport dimensions
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+    
+            // Clamp the positions
+            const clampedX = clampPosition(member.relposition.x, viewportWidth, cursorWidth);
+            const clampedY = clampPosition(member.relposition.y, viewportHeight, cursorHeight);
+    
+            return (
+              <div
+                key={index}
+                className={styles.cursor}
+                style={{
+                  top: `${clampedY}px`,
+                  left: `${clampedX}px`,
+                }}
+              >
+                <CursorSvg cursorColor={member.cursorColor} />
+                <div style={{ backgroundColor: member.cursorColor }} className={styles.cursorName}>
+                  {member.cursorColor === "#ffffff00" ? "" : member.name}
                 </div>
-            ))}
+              </div>
+            );
+          })}
         </>
     );
 };

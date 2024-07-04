@@ -39,6 +39,8 @@ class CloudProvider {
     openConnection () {
         this.connectionAttempts += 1;
 
+        console.log("AAAAAAAAAAA")
+
         try {
             this.connection = new WebSocket((location.protocol === 'http:' ? 'ws://' : 'wss://') + this.cloudHost);
         } catch (e) {
@@ -59,6 +61,7 @@ class CloudProvider {
     }
 
     onMessage (event) {
+        console.log("OOOOO HAIII")
         const messageString = event.data;
         // Multiple commands can be received, newline separated
         messageString.split('\n').forEach(message => {
@@ -126,6 +129,7 @@ class CloudProvider {
      * @param {string} dataNewName The new name for the cloud variable (if renaming)
      */
     writeToServer (methodName, dataName, dataValue, dataNewName) {
+        console.log("Post")
         const msg = {};
         msg.method = methodName;
         msg.user = this.username;

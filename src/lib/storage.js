@@ -10,6 +10,30 @@ class Storage extends ScratchStorage {
     constructor () {
         super();
         this.cacheDefaultProject();
+        this.updateCustomAssets();
+    }
+    async updateCustomAssets() {
+        this.assets = {}
+        const response = await fetch("https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/assetID",{
+            method: 'GET'
+        })
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let chunks = [];
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            chunks.push(value);
+        }
+        const concatenated = new Uint8Array(chunks.reduce((acc, chunk) => acc.concat(Array.from(chunk)), []));
+        const jsonString = decoder.decode(concatenated);
+        const data = JSON.parse(JSON.parse(jsonString));
+        for (const asset of data) {
+            console.log(asset)
+            this.assets[asset.assetID] = asset;
+        }
     }
     addOfficialScratchWebStores () {
         this.addWebStore(
@@ -59,7 +83,12 @@ class Storage extends ScratchStorage {
         this.assetHost = assetHost;
     }
     getAssetGetConfig (asset) {
+        console.log(this.assets, asset)
+        if (asset.assetId in this.assets) {
+            return `https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/images?fileName=${asset.assetId}.${asset.dataFormat}`
+        }
         return `${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`;
+        console.log(`loading >> ${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`)
     }
     getAssetCreateConfig (asset) {
         return {

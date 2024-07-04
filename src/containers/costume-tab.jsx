@@ -36,6 +36,13 @@ import searchIcon from '../components/action-menu/icon--search.svg';
 
 import costumeLibraryContent from '../lib/libraries/costumes.json';
 import backdropLibraryContent from '../lib/libraries/backdrops.json';
+import {ablySpace, ablyInstance} from "../utils/AblyHandlers.jsx";
+
+// import {ablyInstance, ablyChannel} from '../lib/ably';
+
+const channel = ablyInstance.channels.get(ablySpace);
+
+// const channel = ablyInstance.channels.get(ablyChannel);
 
 let messages = defineMessages({
     addLibraryBackdropMsg: {
@@ -100,6 +107,7 @@ class CostumeTab extends React.Component {
         } else {
             this.state = {selectedCostumeIndex: 0};
         }
+        //channel.subscribe('deleteCostume', (msg) => this.deleteCostume(msg));
     }
     componentWillReceiveProps (nextProps) {
         const {
@@ -130,10 +138,24 @@ class CostumeTab extends React.Component {
         }
     }
     handleSelectCostume (costumeIndex) {
-        this.props.vm.editingTarget.setCostume(costumeIndex);
+        const msg = {
+            spriteName: this.props.vm.editingTarget.sprite.name,
+            costumeIndex: costumeIndex,
+        }
+        channel.publish('selectCostume', JSON.stringify(msg));
         this.setState({selectedCostumeIndex: costumeIndex});
     }
     handleDeleteCostume (costumeIndex) {
+        const restoreCostumeFun = this.props.vm.deleteCostume(costumeIndex);
+        this.props.dispatchUpdateRestore({
+            restoreFun: restoreCostumeFun,
+            deletedItem: 'Costume'
+        });
+        return;
+        channel.publish('deleteCostume', JSON.stringify(costumeIndex));
+    }
+    deleteCostume(msg) {
+        const costumeIndex = JSON.parse(msg.data);
         const restoreCostumeFun = this.props.vm.deleteCostume(costumeIndex);
         this.props.dispatchUpdateRestore({
             restoreFun: restoreCostumeFun,

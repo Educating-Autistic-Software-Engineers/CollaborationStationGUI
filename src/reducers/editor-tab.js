@@ -22,6 +22,7 @@ const reducer = function (state, action) {
 };
 
 const activateTab = function (tab) {
+    sessionStorage.setItem('activeTabIndex', tab);
     return {
         type: ACTIVATE_TAB,
         activeTabIndex: tab

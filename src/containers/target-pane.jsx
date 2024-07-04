@@ -100,6 +100,7 @@ class TargetPane extends React.Component {
         });
     }
     handleSelectSprite (id) {
+        console.log(id)
         this.props.vm.setEditingTarget(id);
         if (this.props.stage && id !== this.props.stage.id) {
             this.props.onHighlightTarget(id);

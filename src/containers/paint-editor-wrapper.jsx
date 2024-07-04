@@ -7,6 +7,10 @@ import {inlineSvgFonts} from 'scratch-svg-renderer';
 
 import {connect} from 'react-redux';
 
+import { ablyInstance, ablySpace } from '../utils/AblyHandlers';
+
+const channel = ablyInstance.channels.get(ablySpace);
+
 class PaintEditorWrapper extends React.Component {
     constructor (props) {
         super(props);
@@ -21,23 +25,27 @@ class PaintEditorWrapper extends React.Component {
             this.props.name !== nextProps.name;
     }
     handleUpdateName (name) {
-        this.props.vm.renameCostume(this.props.selectedCostumeIndex, name);
-    }
-    handleUpdateImage (isVector, image, rotationCenterX, rotationCenterY) {
-        if (isVector) {
-            this.props.vm.updateSvg(
-                this.props.selectedCostumeIndex,
-                image,
-                rotationCenterX,
-                rotationCenterY);
-        } else {
-            this.props.vm.updateBitmap(
-                this.props.selectedCostumeIndex,
-                image,
-                rotationCenterX,
-                rotationCenterY,
-                2 /* bitmapResolution */);
+        const msg = {
+            name: name,
+            costumeIndex: this.props.selectedCostumeIndex
         }
+        channel.publish('renameCostume', JSON.stringify(msg));
+    }
+    async handleUpdateImage (isVector, image, rotationCenterX, rotationCenterY) {
+        const target = this.props.vm.editingTarget
+        const assetId = target.sprite['costumes'][this.props.selectedCostumeIndex].assetId
+        console.log('pre',assetId)
+        
+        const msg = {
+            editingTarget: this.props.vm.editingTarget.sprite.name,
+            image: image,
+            rotationCenterX: rotationCenterX,
+            rotationCenterY: rotationCenterY,
+            isVector: isVector,
+            selectedIdx: this.props.selectedCostumeIndex,
+        }
+        
+        await channel.publish('imageUpdated', JSON.stringify(msg));
     }
     render () {
         if (!this.props.imageId) return null;

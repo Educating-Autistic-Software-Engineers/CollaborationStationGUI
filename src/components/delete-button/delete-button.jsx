@@ -23,7 +23,6 @@ const DeleteButton = props => (
             />
         </div>
     </div>
-
 );
 
 DeleteButton.propTypes = {

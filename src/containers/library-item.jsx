@@ -58,7 +58,6 @@ class LibraryItem extends React.PureComponent {
         if (this.id != data.index) {
             return;
         }
-        console.log(this.props)
         let onum = data.num;
         console.log(onum);
         //this.props.onSelect(onum);
@@ -71,14 +70,19 @@ class LibraryItem extends React.PureComponent {
         this.handleMouseLeave(id);
     }
     async handleClick (e) {
-        e.persist();
-        console.log(e)
-        if (!this.props.disabled) {
-            e.preventDefault();
-            await channel.publish('onSelect', JSON.stringify(
-                {'num':this.props.id,'index':this.id}
-            ));
+        if (!this.props.disabled)  {
+            this.props.onSelect(this.props.id);
         }
+        e.preventDefault();
+        //e.persist();
+        // this.props.parent.handleClose();
+        // const data = this.props.parent.getFilteredData()
+        // if (!this.props.disabled) {
+        //     e.preventDefault();
+        //     this.props.vm.addSprite(JSON.stringify(eventInfo)).then(() => {
+        //         this.props.onActivateBlockTab(0);
+        //     });
+        // }
     }
     handleFocus (id) {
         if (!this.props.showPlayButton) {
@@ -89,8 +93,6 @@ class LibraryItem extends React.PureComponent {
         if (e.key === ' ' || e.key === 'Enter') {
             e.preventDefault();
             this.props.onSelect(this.props.id);
-            return
-            await channel.publish('onSelect', toString(this.props.id));
             //this.props.onSelect(this.props.id);
         }
     }

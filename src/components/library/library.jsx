@@ -51,7 +51,6 @@ class LibraryComponent extends React.Component {
             selectedTag: ALL_TAG.tag,
             loaded: false
         };
-        this.getFilteredData();
     }
     componentDidMount () {
         // Allow the spinner to display before loading the content
@@ -59,6 +58,7 @@ class LibraryComponent extends React.Component {
             this.setState({loaded: true});
         });
         if (this.props.setStopHandler) this.props.setStopHandler(this.handlePlayingEnd);
+        //console.log(JSON.stringify(this.getFilteredData()));
     }
     componentDidUpdate (prevProps, prevState) {
         if (prevState.filterQuery !== this.state.filterQuery ||
@@ -68,8 +68,10 @@ class LibraryComponent extends React.Component {
     }
     handleSelect (id) {
         this.handleClose();
-        selectItemWithFunc(this.props.onItemSelected, id);
         this.props.onItemSelected(this.getFilteredData()[id]);
+        // this.handleClose();
+        // selectItemWithFunc(this.props.onItemSelected, id);
+        // this.props.onItemSelected(this.getFilteredData()[id]);
     }
     static selectItemWithFunc(func, id) {
         CostumeLibrary.handleItemSelectedWithVM(this.props.vm, func(id));
@@ -166,6 +168,7 @@ class LibraryComponent extends React.Component {
         this.filteredDataRef = ref;
     }
     render () {
+        //console.log( JSON.stringify(this.getFilteredData()[3]))
         return (
             <Modal
                 fullScreen
@@ -238,6 +241,7 @@ class LibraryComponent extends React.Component {
                             onMouseEnter={this.handleMouseEnter}
                             onMouseLeave={this.handleMouseLeave}
                             onSelect={this.handleSelect}
+                            parent={this}
                         />
                     )) : (
                         <div className={styles.spinnerWrapper}>
