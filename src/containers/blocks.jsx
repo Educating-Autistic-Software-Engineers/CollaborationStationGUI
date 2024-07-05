@@ -1348,8 +1348,9 @@ class Blocks extends React.Component {
             targetX = util.ioQuery('mouse', 'getScratchX');
             targetY = util.ioQuery('mouse', 'getScratchY');
         } else {
-            targetName = Cast.toString(targetName);
-            const goToTarget = this.runtime.getSpriteTargetByName(targetName);
+            // convert targetName to a string
+            targetName = String(targetName);
+            const goToTarget = this.props.vm.runtime.getSpriteTargetByName(targetName);
             if (!goToTarget) return;
             targetX = goToTarget.x;
             targetY = goToTarget.y;
