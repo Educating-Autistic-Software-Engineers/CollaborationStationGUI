@@ -124,7 +124,8 @@ const SpriteSelectorComponent = function (props) {
                         fileChange: onSpriteUpload,
                         fileInput: spriteFileInput,
                         fileMultiple: true
-                    }, {
+                    }, 
+                    {
                         title: intl.formatMessage(messages.addSpriteFromSurprise),
                         img: surpriseIcon,
                         onClick: onSurpriseSpriteClick // TODO need real function for this

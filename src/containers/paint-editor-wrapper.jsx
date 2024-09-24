@@ -7,7 +7,7 @@ import {inlineSvgFonts} from 'scratch-svg-renderer';
 
 import {connect} from 'react-redux';
 
-import { ablyInstance, ablySpace } from '../utils/AblyHandlers';
+import { ablyInstance, ablySpace, name } from '../utils/AblyHandlers';
 
 const channel = ablyInstance.channels.get(ablySpace);
 
@@ -25,27 +25,80 @@ class PaintEditorWrapper extends React.Component {
             this.props.name !== nextProps.name;
     }
     handleUpdateName (name) {
-        const msg = {
-            name: name,
-            costumeIndex: this.props.selectedCostumeIndex
-        }
-        channel.publish('renameCostume', JSON.stringify(msg));
+        this.props.vm.renameCostume(this.props.selectedCostumeIndex, name);
+    }
+    imageDataToBase64(imageData) {
+        return new Promise((resolve, reject) => {
+            const canvas = document.createElement('canvas');
+            canvas.width = imageData.width;
+            canvas.height = imageData.height;
+            const ctx = canvas.getContext('2d');
+            ctx.putImageData(imageData, 0, 0);
+            canvas.toBlob(blob => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            }, 'image/png');
+        });
     }
     async handleUpdateImage (isVector, image, rotationCenterX, rotationCenterY) {
         const target = this.props.vm.editingTarget
+        
+        if (isVector) {
+            this.props.vm.updateSvg(
+                this.props.selectedCostumeIndex,
+                image,
+                rotationCenterX,
+                rotationCenterY,
+                target.sprite.name
+            );
+        } else {
+            this.props.vm.updateBitmap(
+                this.props.selectedCostumeIndex,
+                image,
+                rotationCenterX,
+                rotationCenterY,
+                2 /* bitmapResolution */,
+                target.sprite.name
+            );
+        }
+
+        if (!isVector) {
+            const b64image = await this.imageDataToBase64(image)
+            image = JSON.stringify(b64image)
+        }
+        
         const assetId = target.sprite['costumes'][this.props.selectedCostumeIndex].assetId
+        const ext = isVector ? 'svg' : 'png'
+
         console.log('pre',assetId)
         
         const msg = {
-            editingTarget: this.props.vm.editingTarget.sprite.name,
-            image: image,
+            name: name,
+            editingTarget: target.sprite.name,
+            md5: assetId,
             rotationCenterX: rotationCenterX,
             rotationCenterY: rotationCenterY,
             isVector: isVector,
             selectedIdx: this.props.selectedCostumeIndex,
         }
         
+        const targetURL = `https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=${assetId}.${ext}&cd=attachment`
+        const res = await fetch(targetURL, {
+            method: 'POST',
+            headers: {
+                'Accept': '*/*',
+                'Connection': 'keep-alive',
+                'Content-Type': isVector ? 'image/svg+xml' : 'image/png',
+                'Content-Disposition': `attachment`,
+            },
+            body: image
+        });
+        console.log('image',image, res)
+        
         await channel.publish('imageUpdated', JSON.stringify(msg));
+        console.log('post',target.sprite['costumes'][this.props.selectedCostumeIndex].assetId,res)
     }
     render () {
         if (!this.props.imageId) return null;
@@ -54,6 +107,7 @@ class PaintEditorWrapper extends React.Component {
             vm,
             ...componentProps
         } = this.props;
+        
 
         return (
             <PaintEditor

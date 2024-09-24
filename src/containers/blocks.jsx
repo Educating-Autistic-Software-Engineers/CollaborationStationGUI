@@ -33,7 +33,7 @@ import {Realtime} from "ably";
 import Ably from 'ably';
 import { AblyProvider, useChannel, usePresence } from 'ably/react';
 import {nanoid} from 'nanoid';
-import {ablySpace, ablyInstance} from "../utils/AblyHandlers.jsx";
+import {ablySpace, ablyInstance, name} from "../utils/AblyHandlers.jsx";
 import s3 from '../utils/S3DataFetcher.jsx';
 import AWS from 'aws-sdk';
 //import s3Client from "@aws-sdk/client-s3";
@@ -71,10 +71,11 @@ const { connectionError, channelError } = useChannel({ channelName: 'blocks' }, 
 
 //const fs = require('fs');
 
+const uname = name
 const s3Client = new AWS.S3();
 const nid = nanoid();
 const ably = ablyInstance;
-const channel = ably.channels.get(ablySpace);
+var channel = ably.channels.get(ablySpace);
 let hasInited = false;
 let flag1 = false;
 let flag2 = false;
@@ -150,13 +151,13 @@ class Blocks extends React.Component {
         this.toolboxUpdateQueue = [];
 
         setInterval(() => {
-            if (this.queue.length == 1 && this.queue[0].type == "move") {
-                //console.log("blah")
-                const ev = this.ScratchBlocks.Events.fromJson(this.queue[0], this.workspace)
-                ev.recordUndo = true;
-                this.sendInformation(ev);
-                this.queue.length = 0;
-            }
+            // if (this.queue.length == 1 && this.queue[0].type == "move") {
+            //     //console.log("blah")
+            //     const ev = this.ScratchBlocks.Events.fromJson(this.queue[0], this.workspace)
+            //     ev.recordUndo = true;
+            //     this.sendInformation(ev);
+            //     this.queue.length = 0;
+            // }
             const scale = this.workspace.scale / 0.675
             const dragRelative = {x: this.workspace.scrollX * scale, y: this.workspace.scrollY * scale}
             if (sessionStorage.getItem("dragRelative") != JSON.stringify(dragRelative)) {
@@ -167,13 +168,18 @@ class Blocks extends React.Component {
 
         setInterval(() => {
             this.save();
-        }, 5 * 60 * 1000); 
+        }, 10 * 60 * 1000); 
 
         console.log("constructed");
+        this.initInformation();
+
+        document.addEventListener('click', this.handleClick.bind(this))
 
     }
 
     componentDidMount () {
+
+        // console.log("blocks", this.ScratchBlocks)
         
         this.ScratchBlocks = VMScratchBlocks(this.props.vm, this.props.useCatBlocks);
         this.ScratchBlocks.prompt = this.handlePromptStart;
@@ -197,7 +203,7 @@ class Blocks extends React.Component {
         const toolboxWorkspace = this.workspace.getFlyout().getWorkspace();
 
         const varListButtonCallback = type =>
-            (() => this.ScratchBlocks.Variables.createVariable(this.workspace, null, type));
+            (() => {this.ScratchBlocks.Variables.createVariable(this.workspace, null, type)});
         const procButtonCallback = () => {
             this.ScratchBlocks.Procedures.createProcedureDefCallback_(this.workspace);
         };
@@ -305,6 +311,58 @@ class Blocks extends React.Component {
         sessionStorage.setItem('blocksRect', rect);
         //console.log('block dimensions set to', rect)
     }
+    repeatKey(key, length) {
+        const keyDigits = key.split('').map(Number);
+        const repeatedKey = [];
+        for (let i = 0; i < length; i++) {
+            repeatedKey.push(keyDigits[i % keyDigits.length]);
+        }
+        return repeatedKey;
+    }
+    
+    encryptNumber(number, key) {
+        const numberDigits = number.split('').map(Number);
+        const repeatedKey = this.repeatKey(key, numberDigits.length);
+    
+        const encryptedDigits = numberDigits.map((num, index) => {
+            const sum = num + repeatedKey[index];
+            return sum >= 10 ? sum - 10 : sum;
+        });
+    
+        return encryptedDigits.join('');
+    }
+    handleClick(e) {
+        console.log("CLICKED", e.clientX,  " ", e.clientY, " ", window.innerWidth, " ", window.innerHeight)
+        fetch('https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/mouse-click', {
+            method: 'POST',
+            body: JSON.stringify({
+                user: name,
+                room: ablySpace,
+                dragRelative: JSON.parse(sessionStorage.getItem("dragRelative")),
+                clickId: this.getRandomHexString(16),
+                x: e.clientX,
+                y: e.clientY,
+                tabIndex: sessionStorage.getItem("activeTabIndex"),
+                resolution: {width: window.innerWidth, height: window.innerHeight},
+            })
+        })
+        if (!this.isViewOnly && e.clientX > window.innerWidth - 100 && e.clientY < 50) {
+            this.save();
+            alert("Saved!")
+        }
+        if (!this.isViewOnly && e.clientX > window.innerWidth - 175 && e.clientX < window.innerWidth - 100 && e.clientY < 50) {
+            navigator.clipboard.writeText("https://collaborationstation.dev/room?view="+this.encryptNumber(ablySpace, "90210"));
+            alert("Copied viewonly shareable link to clipboard!")
+        }
+        if (sessionStorage.getItem('analMode') == "T" && e.clientX > window.innerWidth - 100 && e.clientY < 50) {
+            this.vidx = 1;
+            this.load();
+        }
+        if (sessionStorage.getItem('analMode') == "T" && e.clientX > window.innerWidth - 175 && e.clientX < window.innerWidth - 100 && e.clientY < 50) {
+            this.vidx = -1;
+            this.load();
+        }
+    }
     setLocale () {
         this.ScratchBlocks.ScratchMsgs.setLocale(this.props.locale);
         this.props.vm.setLocale(this.props.locale, this.props.messages)
@@ -358,8 +416,21 @@ class Blocks extends React.Component {
         }
     }
 
+    waitForAbly() {
+        return new Promise((resolve) => {
+          if (ably.connection.state === 'connected') {
+            resolve();
+          } else {
+            ably.connection.once('connected', () => {
+              resolve();
+            });
+          }
+        });
+      }
+
     async initInformation() {
         if (!hasInited) {
+            this.isViewOnly = sessionStorage.getItem('isViewOnly')=="T";
             this.hasLoadedFully = false;
             this.hasLoadedInitially = false;
             this.queueWorkspaceUpdate = false
@@ -367,35 +438,54 @@ class Blocks extends React.Component {
             this.queueFurtherSends = false;
             this.stopEmission = false;
             this.holdingBlock = false;
+            this.errorLoading = false;
+            this.keyMarker = null;
+            this.versionIdMarker = null;
             this.lastBlockId = "";
             this.lastBlockType = "";
             this.lastTempId = ""
             this.randomIndex = 0;
+            this.cacheEventTime = 50 //ms
+            this.vid = -1;
             hasInited = true;
 
-            this.varCallbackFunc = function(a,b,c) {console.log(a,b,c, "callback var trigged early")};
+            this.timer = null;
 
+            // this.varCallbackFunc = function(a,b,c) {console.log(a,b,c, "callback var trigged early")};
+
+            this.messageQueue = []
             this.backlog = [];
             this.queue = [];
             //this.blocks = [];
             this.idToAll = {};
             this.amountOfBlocks = 0;
 
-            await ably.connection.once("connected");
-            console.log("connected to Ably");
+            console.log("EDING", ably)
+            await this.waitForAbly();
+            if (!ably.connection.state == "connected") {
+                console.log("waiting")
+            } else {
+                console.log("already connected")
+            }
+            console.log("connected to Ably!!");
 
             await channel.subscribe('event', (message) => this.recieveInformation(message));
             //await channel.subscribe('onSelect', (message) => this.spriteOnSelect(message));
             await channel.subscribe('imageUpdated', (message) => this.imageUpdated(message))
-            await channel.subscribe('renameCostume', (message) => {
-                const data = JSON.parse(message.data);
-                this.props.vm.renameCostume(data.costumeIndex, data.name);
-            });
             await channel.subscribe('newJoin', this.newUserJoined.bind(this))
-            await channel.subscribe('goodForLoad', (msg) => {
+            await channel.subscribe('categorySelected', this.parseCategorySelected)
+            await channel.subscribe('goodForLoad', async (msg) => {
+                const uid = JSON.parse(msg.data).uid;
+                if (uid == nid) {
+                    return
+                }
+
                 if (!this.hasLoadedInitially) {
-                    this.load();
+                    await this.load();
                     this.hasLoadedInitially = true;
+                    
+                    this.hasLoadedFully = true;
+                    console.log("fully loaded")
                 }
             })
             // await channel.subscribe('varPrompt', (message) => {
@@ -414,25 +504,20 @@ class Blocks extends React.Component {
             // Fetch the presence data
             const presenceSet = await channel.presence.get();
 
-            console.log("prescence", presenceSet)
+            console.log("presence", presenceSet)
             
             if (presenceSet.length > 0) {
                 //console.log("presence set", presenceSet)
-                await channel.subscribe('goodForLoad', async (msg) => {
-                    if (!this.hasLoadedInitially) {
-                        await this.load();
-                        this.hasLoadedInitially = true;
-                    }
-                })
                 await channel.publish('newJoin', JSON.stringify({uid: nid}));
             } else {
                 await this.load();
+
+                this.hasLoadedFully = true;
+                console.log("fully loaded")
             }
             
             await channel.presence.enter() 
 
-            this.hasLoadedFully = true;
-                
         }
     }
 
@@ -441,7 +526,6 @@ class Blocks extends React.Component {
         
         const data = JSON.parse(msg.data)
         let id = data.num;
-        console.log('ablySDFSDF', data, id)
         const eventInfo = data.data;
         
         this.stopEmission = true;
@@ -452,16 +536,70 @@ class Blocks extends React.Component {
         this.stopEmission = false;
     }
 
+    async fetchAndConvertToImageData(url) {
+        try {
+            // Fetch the image as a blob
+            const response = await fetch(url);
+            const blob = await response.blob();
+            
+            // Create an HTMLImageElement
+            const img = new Image();
+            
+            // Create a promise that resolves when the image has loaded
+            const loaded = new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = reject;
+            });
+            
+            // Set the image source to the fetched URL
+            img.src = URL.createObjectURL(blob);
+            
+            // Wait for the image to load
+            await loaded;
+            
+            // Create a canvas element
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            // Set the canvas dimensions to match the image
+            canvas.width = img.width;
+            canvas.height = img.height;
+            
+            // Draw the image on the canvas
+            ctx.drawImage(img, 0, 0);
+            
+            // Get ImageData from the canvas
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            
+            // Return the ImageData object
+            return imageData;
+            
+        } catch (error) {
+            console.error('Error fetching or converting image:', error);
+            throw error;
+        }
+    }
+
     async imageUpdated(msg) {
         const data = JSON.parse(msg.data);
+
+        if (data.name == uname) {
+            return;
+        }
         
-        const image = data.image;
+        const md5 = data.md5;
         const rotationCenterX = data.rotationCenterX;
         const rotationCenterY = data.rotationCenterY;
         const isVector = data.isVector;
         const costumeIndex = data.selectedIdx;
 
+        const ext = isVector ? 'svg' : 'png';
+
+        
         if (isVector) {
+            const resload = await fetch(`https://d3pl0tx5n82s71.cloudfront.net/${md5}.${ext}`)
+            const image = await resload.text();
+            console.log('recieved', image)
             this.props.vm.updateSvg(
                 costumeIndex,
                 image,
@@ -470,76 +608,153 @@ class Blocks extends React.Component {
                 data.editingTarget
             );
         } else {
+            // const arrayBuffer = await resload.arrayBuffer();
+            // const uint8Array = new Uint8Array(arrayBuffer);
+            // let binaryString = '';
+            // for (let i = 0; i < uint8Array.length; i++) {
+            //     binaryString += String.fromCharCode(uint8Array[i]);
+            // }
+            const image = await this.fetchAndConvertToImageData(`https://d3pl0tx5n82s71.cloudfront.net/${md5}.${ext}`)
+            // console.log('recieved', image)
+            // console.log("class", this.fetchAndConvertToImageData(binaryString))
             this.props.vm.updateBitmap(
                 costumeIndex,
                 image,
                 rotationCenterX,
                 rotationCenterY,
-                2 /* bitmapResolution */
+                2 /* bitmapResolution */,
+                data.editingTarget
             );
         }
         
 
-        const target = this.props.vm.editingTarget
-        const assetId = target.sprite['costumes'][costumeIndex].assetId
-        const targetURL = `https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/images?fileName=${assetId}.svg`
-        const res = await fetch(targetURL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'image/svg+xml'
-            },
-            body: image
-        });
-        const res2 = await fetch("https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/assetID",{
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: `[${JSON.stringify({
-                assetID: assetId,
-                isCustom: "True"
-            })}]`
-        })
-        console.log(res2)
-        console.log('post',assetId)
+        // const res2 = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/assetID",{
+        //     method: 'POST',
+        //     headers: {
+        //         'Content-Type': 'application/json'
+        //     },
+        //     body: `[${JSON.stringify({
+        //         assetID: assetId,
+        //         isCustom: "True"
+        //     })}]`
+        // })
+        // console.log(res2)
 
     }
 
     async load() {
 
+        if (this.startingLoad) {
+            return;
+        }
+
         try {
+            this.startingLoad = true;
             this.stopEmission = true;
 
-            //const decoder = 
-            const response = await fetch("https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/s3-storage?space="+ablySpace,{
-                method: 'GET'
-            })
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder('utf-8');
-            let chunks = [];
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) {
-                    break;
-                }
-                chunks.push(value);
+            const datas = {
+                key: ablySpace,
+                vid: this.vid,
+                keyMarker: this.keyMarker,
+                versionIdMarker: this.versionIdMarker,
             }
-            const concatenated = new Uint8Array(chunks.reduce((acc, chunk) => acc.concat(Array.from(chunk)), []));
-            const jsonString = decoder.decode(concatenated);
-            const data = JSON.parse(jsonString);
-            await this.props.vm.loadProject(data);
+
+            console.log("TOLOAD", datas)
+
+            //const decoder = 
+            const response = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/s3-storage",{
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(datas)
+            })
+            if (true) {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let chunks = [];
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) {
+                        break;
+                    }
+                    chunks.push(value);
+                }
+                const concatenated = new Uint8Array(chunks.reduce((acc, chunk) => acc.concat(Array.from(chunk)), []));
+                console.log("PARSING", concatenated)
+                const jsonString = decoder.decode(concatenated);
+                console.log(jsonString)
+                if (jsonString == "{\"message\":\"No versions found\"}") {
+                    console.log("starting new project...")
+                } else {
+                    const jsonParsed = JSON.parse(jsonString);
+                    console.log("JSPARESE", jsonParsed)
+                    this.keyMarker = jsonParsed.keyMarker;
+                    this.versionIdMarker = jsonParsed.versionIdMarker;
+
+                    const data = JSON.parse(jsonParsed.versionData);
+                    console.log(data)
+                    const targets = data.targets;
+                    let hasSeenStage = false;
+                    const targets2 = [...targets];
+                    for (let target of targets2) {
+                        
+                        
+                        if (target.isStage) {
+                            if (hasSeenStage) {
+                                const idx = targets.indexOf(target);
+                                targets.splice(idx, 1);
+                                console.log("removed", target)
+                                continue;
+                            }
+
+                            hasSeenStage = true;
+                        }
+
+                        const costumes = target.costumes;
+                        //make a copy of costumes
+                        const costumes2 = [...costumes];
+                        for (let costume of costumes2) {
+                            // check if the costume object has the costume variable:
+                            if (!costume.hasOwnProperty("md5ext")) {
+                                costume.md5ext = costume.assetId + "." + costume.dataFormat;
+                            }
+
+                            // check if costume.md5ext contains the word "undefined"
+                            if (costume.md5ext.includes("undefined")) {
+                                // remove the costume from the array
+                                const idx = costumes.indexOf(costume);
+                                costumes.splice(idx, 1);
+                                console.log("removed", costume)
+                            }
+                        }
+                    }
+                    const data2 = JSON.stringify(data);
+                    await this.props.vm.loadProject(data2);
+                }
+            } else {
+                const arrayBuffer = await response.arrayBuffer();
+                await this.props.vm.loadProject(arrayBuffer);
+            }
+            
+            if (sessionStorage.getItem('analMode') == "T") {
+                this.startingLoad = false;
+            }
 
             //this.props.vm.editingTarget.setCostume(1);
         } catch (error) {
+
+            console.log(error)
+
+            alert("Error loading project: " + JSON.stringify(error));
             console.error('Error fetching data from S3:', error);
+            this.errorLoading = true;
         }
 
         // this.props.vm.editingTarget = this.props.vm.runtime.getSpriteTargetByName("Apple");
         // this.props.vm.editingTarget = this.props.vm.runtime.getSpriteTargetByName("Taco");
 
         this.stopEmission = false;
-
-        return
         
     }
 
@@ -547,19 +762,69 @@ class Blocks extends React.Component {
 
     async save() {
 
+        if (this.isViewOnly) {
+            console.log("view only mode; ignoring save")
+            return;
+        }
+
+        if (!this.hasLoadedFully) {
+            console.log("not loaded fully; trying to save. Ignoring.")
+            return;
+        }
+
         const s = JSON.stringify(this.props.vm.toJSON())
         console.log("SAVED!!!")
         
-        await fetch('https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/s3-storage', {
+        await fetch('https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/s3-storage', {
             method: 'POST',
             body: ablySpace+"~|@^|@|~"+s
+        });
+
+        this.props.vm.renderer.requestSnapshot(dataURI => {
+            console.log("SAVEDTO", dataURI)
         });
 
     }
  
     // heavily edited from https://github.com/BlockliveScratch/Blocklive/blob/master/extension/scripts/editor.js#L834
 
+    getRandomHexString(length) {
+        const chars = '0123456789abcdef';
+        let result = '';
+        for (let i = 0; i < length; i++) {
+          const randomIndex = Math.floor(Math.random() * chars.length);
+          result += chars[randomIndex];
+        }
+        return result;
+    }
+
+    logData (data) {
+        if (!this.hasLoadedFully || this.isViewOnly) {
+            return
+        }
+        console.log("posting'", data)
+        fetch('https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/blockPlacement', {
+            method: 'POST',
+            body: JSON.stringify(data)
+        }).then(resp => console.log('logged', resp));
+    }
+
     async sendInformation(eve) {
+
+        console.log(this.props.vm);
+
+        if (this.isViewOnly) {
+            console.log("view only mode; ignoring event")
+            return;
+        }
+
+        if ( !(eve.element == "click" || eve.element == "stackclick" || eve.element == "field") ) {
+            if ( (eve.group == "" || !eve.recordUndo) ) {
+                return;
+            }
+        }
+
+        console.log("INFO INFO", eve)
 
         let parentID = -1;
         let childIDX = -1;
@@ -578,12 +843,13 @@ class Blocks extends React.Component {
         }
 
         if (this.stopEmission) {
-            //console.log("Stopped emission")
+            console.log("recieved own event;", this.pauseWorkspaceUpdate, this.lastBlockId, eve.blockId, this.lastBlockType, eve.type)
+            // debugger
             if (this.lastBlockId == eve.blockId && this.lastBlockType == eve.type) {
                 this.stopEmission = false;
                 if (this.lastTempId != "") {
-                    this.revertToOriginalTarget();
-                    this.lastTempId = ""
+                    // this.revertToOriginalTarget();
+                    // this.lastTempId = ""
                 }
             }
             return;
@@ -591,12 +857,18 @@ class Blocks extends React.Component {
         if (this.holdingBlock) {return;}
         //console.log(eve.element, eve.recordUndo, eve.group, eve)
         
-        if ( !(eve.element == "click" || eve.element == "stackclick" || eve.element == "field") ) {
-            if ( (eve.group == "" || !eve.recordUndo) ) {
-                return;
-            }
+        console.log('loading', this.hasLoadedFully)
+        if (this.hasLoadedFully) {
+            this.logData({
+                moveId: this.getRandomHexString(16),
+                time: Date.now(),
+                user: name,
+                room: ablySpace,
+                type: eve.type,
+                target: this.props.vm.editingTarget.sprite.name,
+                event: eve,
+            });
         }
-
 
         // this is if an event happens while an event is being sent to the server;
         // we queue the event to be sent after the current event is sent
@@ -609,19 +881,9 @@ class Blocks extends React.Component {
             return;
         }
 
-        // we queue moves because they can follow other moves to snap blocks together and we want to send these together
-        // to avoid visual artifacts
-        if (eve.type == "move") {
-            if (this.queue.length == 0) {
-                // debugger
-                console.log(singleMessage, "queueing move")
-                this.queue.push(singleMessage);
-                return;
-            }
-        }
         
         // we queue the create event because it has to immediately be moved after
-        if (eve.type == "create" || eve.element == "click") {
+        if (eve.type == "create" || eve.element == "click" || (eve.type == 'move' && eve.oldParentId)) {
             console.log(singleMessage, eve.type == "create" ? "queueing create" : "queueing other");
             this.queue.push(singleMessage);
             return;
@@ -640,12 +902,12 @@ class Blocks extends React.Component {
         
         //console.log(this.queue, this.queue.length, "sending");
         this.queue.push(singleMessage);
-        console.log('pushing to queue', singleMessage)
+        console.log('pushing to queue', singleMessage, eve)
         //console.log(this.queue, this.queue.length, "sending");
         
         console.log('sending array of length: ', this.queue.length)
 
-        await this.sendArray(this.queue, parentID, childIDX);
+        this.sendArray(this.queue, parentID, childIDX);
 
         this.queue.length = 0;
         
@@ -657,20 +919,53 @@ class Blocks extends React.Component {
         
     }
 
-    async sendArray(arr, parentID=-1, childIDX=-1) {
-        const message = {
-            uid: nid,
-            target: this.props.vm.editingTarget.sprite.name,
-            messages: arr,
-            parentID: parentID,
-            childIDX: childIDX,
-            rIDX: this.randomIndex
+    async sendArray(arr, parentID=-1, childIDX=-1, dir=true) {
+
+        // Add the new events to the queue
+        this.messageQueue.push(...arr);
+
+        // If a timer is already running, do nothing
+        if (this.timer) {
+            return;
         }
 
-        console.log("sending array", message)
-        this.queueFurtherSends = true;
-        await channel.publish('event', JSON.stringify(message));
-        this.queueFurtherSends = false;
+        
+        this.timer = setTimeout(async () => {
+            // handing field events since they don't have a consistent blockId
+            if (parentID == -1) {
+                const eve = this.messageQueue[0];
+                if (eve.element == "field") {
+                    const parentBlock = this.workspace.getBlockById(eve.blockId).parentBlock_;
+                    if (!!parentBlock) {
+                        parentID = parentBlock.id;
+                        for (let childBlock of parentBlock.childBlocks_) {
+                            if (childBlock.id == eve.blockId) {
+                                childIDX = parentBlock.childBlocks_.indexOf(childBlock);
+                            }
+                        }
+                    }
+                }
+            }
+
+            const message = {
+                uid: nid,
+                target: this.props.vm.editingTarget.sprite.name,
+                messages: this.messageQueue,
+                parentID: parentID,
+                childIDX: childIDX,
+                rIDX: this.randomIndex,
+                dir: dir
+            };
+
+            console.log("sending array", message);
+            this.queueFurtherSends = true;
+            channel.publish('event', JSON.stringify(message));
+            this.queueFurtherSends = false;
+
+            // Clear the queue and timer
+            this.messageQueue = [];
+            this.timer = null;
+        }, this.cacheEventTime);
     }
 
     enableEmission() {
@@ -696,9 +991,7 @@ class Blocks extends React.Component {
         
         this.randomIndex = data.rIDX;
         const targetName = data.target;
-
-        let ogTarget = this.props.vm.editingTarget;
-        this.lastTempId = ogTarget.id;
+        const dir = data.dir;
 
         this.changeTarget(targetName);
 
@@ -709,7 +1002,7 @@ class Blocks extends React.Component {
             if (data.parentID != -1) {
                 message.blockId = this.workspace.getBlockById(data.parentID).childBlocks_[data.childIDX].id;
             }
-            this.parseEvent(message, targetName);
+            this.parseEvent(message, targetName, dir);
         }
 
         console.log("finished parsing")
@@ -723,8 +1016,19 @@ class Blocks extends React.Component {
     
     }
 
-    changeTarget(targetName) {
+    changeTarget(targetName, revertAutomatically = true) {
+        
         if (targetName == this.props.vm.editingTarget.sprite.name) {return}
+        
+        var ogTarget
+        if (this.lastTempId != "") {
+            // if another target is already being edited, we have to revert to the original target of that target
+            ogTarget = this.props.vm.runtime.getTargetById(this.lastTempId);
+        } else {
+            // we create the original target
+            ogTarget = this.props.vm.editingTarget;
+            this.lastTempId = ogTarget.id;
+        }
 
         this.disableWorkspaceUpdate()
         const tmpTarget = this.getTargetByName(targetName);
@@ -740,30 +1044,38 @@ class Blocks extends React.Component {
         this.props.vm.runtime._editingTarget = this.props.vm.editingTarget;
         //console.log(">>" ,this.pauseWorkspaceUpdate)
         // this.props.vm.setEditingTarget(tmpTarget.id);
+
+        if (revertAutomatically) {
+            setTimeout(() => {
+                if (!this.pauseWorkspaceUpdate) {return}
+                this.revertToOriginalTarget();
+            }, 1);
+        }
     }
 
     revertToOriginalTarget() {
-        this.stopEmission = false;
-        const ogTarget = this.props.vm.runtime.getTargetById(this.lastTempId);
-        // this.props.vm.editingTarget = ogTarget;
-        // this.props.vm.emitTargetsUpdate(false)
-        // this.props.vm.emitWorkspaceUpdate();
-        // this.props.vm.runtime.setEditingTarget(this.props.vm.editingTarget);
-        //wait 0.5 seconds
-        // this.queueWhileOnDifferentTarget = true;
         setTimeout(async () => {
-            if (ogTarget.id === this.props.vm.editingTarget.id) {return}
+            if (this.lastTempId == "") {
+                return
+            }
+            const ogTarget = this.props.vm.runtime.getTargetById(this.lastTempId);
+            if (ogTarget.id === this.props.vm.editingTarget.id) {
+                this.stopEmission = false
+                return
+            }
+            this.lastTempId = "";
             // this.queueWhileOnDifferentTarget = false;
             // this.queueFurtherSends = true;
             // await this.sendBacklog();
             // this.queueFurtherSends = false;
             this.enableWorkspaceUpdate()
             this.props.vm.setEditingTarget(ogTarget.id);
+            this.stopEmission = false;
             console.log("OG TARGET SET")
         }, 1);
     }
 
-    parseEvent(event, targetName="") {
+    parseEvent(event, targetName="", dir=true) {
         // console.log(this.ScratchBlocks.Events.Abstract.workspaceId)
         // console.log(this.workspace.id)
         console.log('parsing!!', event)
@@ -790,7 +1102,7 @@ class Blocks extends React.Component {
             // await channel.publish('preRefresh', "");
             // await new Promise(r => setTimeout(r, 200));
             // await this.load();
-            this.revertToOriginalTarget();
+            // this.revertToOriginalTarget();
             return;
         }
 
@@ -800,10 +1112,7 @@ class Blocks extends React.Component {
             this.holdingBlock = false;
             this.workspace.getBlockById(event.blockId).getSvgRoot().style.transition = "transform 0.5s";
         }
-
-        //console.log(event, "recieved")
-        
-        
+     
         const eventInstance = this.ScratchBlocks.Events.fromJson(event, this.workspace);
 
         if (event.type == "comment_create") {
@@ -828,13 +1137,15 @@ class Blocks extends React.Component {
                 const broadcastEvent = {isCloud: false, isLocal: false, type: "var_create", varId: event.broadcastInfo.broadcastId, varName: event.broadcastInfo.broadcastName, varType: "broadcast_msg"}
                 this.props.vm.blockListener(broadcastEvent)
                 const newEvent = this.ScratchBlocks.Events.fromJson(broadcastEvent, this.workspace);
-                newEvent.run(true);
+                newEvent.collabFlag = true
+                newEvent.run(dir);
             }
             
+            eventInstance.collabFlag = true
+            eventInstance.run(dir); // handles block
             if (eventInstance.type == "ui") { 
                 this.props.vm.editingTarget.blocks.blocklyListen(eventInstance); //runs the block
             } else {
-                eventInstance.run(true); // handles block
                 this.lastBlockId = event.blockId;
                 this.lastBlockType = event.type;
             }
@@ -848,9 +1159,10 @@ class Blocks extends React.Component {
         }
         console.log("done")
 
-        if (eventInstance.type == "ui") {
-            this.revertToOriginalTarget()
-        }
+        // other non-ui events get reverted elsewhere
+        // if (eventInstance.type == "ui") {
+        //     this.revertToOriginalTarget()
+        // }
 
         // this.props.vm.editingTarget = ogTarget;
         // this.props.vm.runtime._editingTarget = this.props.vm.editingTarget;
@@ -891,10 +1203,10 @@ class Blocks extends React.Component {
         }
         this.workspace.addChangeListener(this.props.vm.blockListener);
         this.workspace.addChangeListener((eve) => {
-            //console.log('forced',eve)
+            // console.log('forced',eve)
             this.sendInformation.bind(this)(eve)
         })
-        this.workspace.addChangeListener(this.enableEmission.bind(this))
+        // this.workspace.addChangeListener(this.enableEmission.bind(this))
         //this.workspace.addChangeListener(this.save.bind(this))
         this.flyoutWorkspace = this.workspace
             .getFlyout()
@@ -921,11 +1233,20 @@ class Blocks extends React.Component {
         let ogAddSprite = this.props.vm.addSprite.bind(this.props.vm);
         this.props.vm.addSprite = (input) => {
             const inputJSONED = JSON.parse(input);
+            let spriteName = inputJSONED.name ? inputJSONED.name : inputJSONED.objName;
+            
+            if (spriteName == "Stage") {
+                spriteName = "Stage1";
+            }
+
             while(true) {
                 let isDuplicate = false;
                 for (let target of this.props.vm.runtime.targets) {
-                    if (target.sprite.name == inputJSONED.objName) {
-                        inputJSONED.objName = incrementStringNumber(inputJSONED.objName)
+                    if (target.sprite.name == spriteName) {
+                        if (!this.hasLoadedFully) {
+                            return
+                        }
+                        spriteName = incrementStringNumber(spriteName)
                         isDuplicate = true;
                         console.log("DUPLICAATE")
                         break;
@@ -935,9 +1256,23 @@ class Blocks extends React.Component {
                     break;
                 }
             }
+            inputJSONED.objName = spriteName;
+            inputJSONED.name = spriteName;
             input = JSON.stringify(inputJSONED);
+
+            this.logData({
+                moveId: this.getRandomHexString(16),
+                time: Date.now(),
+                user: uname,
+                room: ablySpace,
+                type: "custom:createSprite",
+                spriteName: inputJSONED.name,
+            });
+
             const msg = {input: input, uid: nid};
-            channel.publish('newSprite', JSON.stringify(msg));
+            if (this.hasLoadedFully) {
+                channel.publish('newSprite', JSON.stringify(msg));
+            }
             return ogAddSprite(input);
         }
         channel.subscribe('newSprite', async (message) => {
@@ -956,17 +1291,23 @@ class Blocks extends React.Component {
 
         let ogDeleteSprite = this.props.vm.deleteSprite.bind(this.props.vm)
         this.props.vm.deleteSprite = (targetID) => {
-            // find instance
             const name = this.props.vm.runtime.getTargetById(targetID).sprite.name;
+            
+            this.logData({
+                moveId: this.getRandomHexString(16),
+                time: Date.now(),
+                user: uname,
+                room: ablySpace,
+                type: "custom:deleteSprite",
+                spriteName: name,
+            });
+            
             channel.publish('deleteSprite', JSON.stringify(name));
         }
         channel.subscribe('deleteSprite', (message) => {
             const name = JSON.parse(message.data)
             const id = this.getTargetByName(name).id
             ogDeleteSprite(id)
-            // if (ogName != name) {
-            //     this.props.vm.setEditingTarget(this.props.vm.runtime.getSpriteTargetByName(ogName).id);
-            // }
         });
 
         let ogAddBackdrop = this.props.vm.addBackdrop.bind(this.props.vm);
@@ -982,6 +1323,11 @@ class Blocks extends React.Component {
         let ogRenameSprite = this.props.vm.renameSprite.bind(this.props.vm);
         this.props.vm.renameSprite = async (id, name) => {
             const spriteName = this.props.vm.runtime.getTargetById(id).sprite.name;
+
+            if (name == "Stage") {
+                name = "Stage1";
+            }
+
             while(true && this.hasLoadedFully) {
                 let isDuplicate = false;
                 for (let target of this.props.vm.runtime.targets) {
@@ -996,6 +1342,17 @@ class Blocks extends React.Component {
                     break;
                 }
             }
+
+            this.logData({
+                moveId: this.getRandomHexString(16),
+                time: Date.now(),
+                user: uname,
+                room: ablySpace,
+                type: "custom:renameSprite",
+                spriteName: spriteName,
+                newName: name,
+            });
+
             const msg = {spriteName: spriteName, name: name};
             channel.publish('renameSprite', JSON.stringify(msg));
         }
@@ -1016,19 +1373,63 @@ class Blocks extends React.Component {
         });
 
         let ogSpriteInfo = this.props.vm.postSpriteInfo
-        this.props.vm.postSpriteInfo = async (data) => {
+        this.props.vm.postSpriteInfo = (data) => {
             let name = this.props.vm.editingTarget.sprite.name;
             if (this.props.vm._dragTarget) {
                 name = this.props.vm._dragTarget.sprite.name;
             }
-            const msg = {name: name, data: data};
-            await channel.publish('spriteInfo', JSON.stringify(msg));
+            const msg = {name: name, data: data, uid: nid};
+            if (this.hasLoadedFully) {
+                channel.publish('spriteInfo', JSON.stringify(msg));
+            }
+            this.getTargetByName(name).postSpriteInfo(data);
         }
         channel.subscribe('spriteInfo', (message) => {
             const d = JSON.parse(message.data);
+            if (d.uid == nid) {return}
             this.getTargetByName(d.name).postSpriteInfo(d.data);
             this.props.vm.runtime.emitProjectChanged();
         });
+
+        let ogReorderCostume = this.props.vm.reorderCostume.bind(this.props.vm);
+        this.props.vm.reorderCostume = (targetId, costumeIndex, newIndex) => {
+            const spriteName = this.props.vm.runtime.getTargetById(targetId).sprite.name;
+            const msg = {spriteName: spriteName, costumeIndex: costumeIndex, newIndex: newIndex, uid:nid};
+            channel.publish('reorderCostume', JSON.stringify(msg));
+            return ogReorderCostume(targetId, costumeIndex, newIndex);
+        }
+        channel.subscribe('reorderCostume', (message) => {
+            const d = JSON.parse(message.data);
+            if (d.uid == nid) {return}
+            const targetId = this.getTargetByName(d.spriteName).id;
+            ogReorderCostume(targetId, d.costumeIndex, d.newIndex);
+        });
+
+        let ogReorderSound = this.props.vm.reorderSound.bind(this.props.vm);
+        this.props.vm.reorderSound = (targetId, soundIndex, newIndex) => {
+            const spriteName = this.props.vm.runtime.getTargetById(targetId).sprite.name;
+            const msg = {spriteName: spriteName, soundIndex: soundIndex, newIndex: newIndex, uid:nid};
+            channel.publish('reorderSound', JSON.stringify(msg));
+            return ogReorderSound(targetId, soundIndex, newIndex);
+        }
+        channel.subscribe('reorderSound', (message) => {
+            const d = JSON.parse(message.data);
+            if (d.uid == nid) {return}
+            const targetId = this.getTargetByName(d.spriteName).id;
+            ogReorderSound(targetId, d.soundIndex, d.newIndex);
+        })
+
+        const ogReorderTarget = this.props.vm.reorderTarget.bind(this.props.vm)
+        this.props.vm.reorderTarget = (targetIndex, newIndex) => {
+            const msg = {targetIndex: targetIndex, newIndex: newIndex, uid:nid};
+            channel.publish('reorderTarget', JSON.stringify(msg));
+            return ogReorderTarget(targetIndex, newIndex);
+        }
+        channel.subscribe('reorderTarget', (message) => {
+            const d = JSON.parse(message.data);
+            if (d.uid == nid) {return}
+            ogReorderTarget(d.targetIndex, d.newIndex);
+        })
 
         // const ogVMemit = this.props.vm.runtime.emit.bind(this.props.vm.runtime)
         // this.props.vm.runtime.emit = (a1, a2) => {
@@ -1043,17 +1444,7 @@ class Blocks extends React.Component {
         //     ogVMemit(d.a1, d.a2);
         // });
 
-        //let ogDeleteSound = this.props.vm.deleteSound.bind(this.props.vm);
-        this.props.vm.deleteSound = async (soundIndex) => {
-            const name = this.props.vm.runtime.editingTarget.sprite.name;
-            const msg = {soundIndex: soundIndex, name: name};
-            const ret = await channel.publish('deleteSound', JSON.stringify(msg));
-            return ret;
-        }
-        channel.subscribe('deleteSound', (message) => {
-            const d = JSON.parse(message.data);
-            const soundIndex = d.soundIndex;
-            const target = this.getTargetByName(d.name);
+        const deleteSound = function (soundIndex, target) {
             const deletedSound = target.deleteSound(soundIndex);
             if (deletedSound) {
                 this.runtime.emitProjectChanged();
@@ -1064,10 +1455,27 @@ class Blocks extends React.Component {
                 return restoreFun;
             }
             return null;
+        }.bind(this.props.vm)
+        //let ogDeleteSound = this.props.vm.deleteSound.bind(this.props.vm);
+        this.props.vm.deleteSound = async (soundIndex) => {
+            const name = this.props.vm.editingTarget.sprite.name;
+            const msg = {soundIndex: soundIndex, name: name, uid: nid};
+            await channel.publish('deleteSound', JSON.stringify(msg));
+            return deleteSound(soundIndex, this.props.vm.editingTarget);
+        }
+        channel.subscribe('deleteSound', (message) => {
+            const d = JSON.parse(message.data);
+            if (d.uid == nid) {return}
+            const soundIndex = d.soundIndex;
+            const target = this.getTargetByName(d.name);
+            deleteSound(soundIndex, target);
         });
+
+        this.props.vm.shareBlocksToTarget = async (blocks, target, optID) => {}
 
         let ogAddSound = this.props.vm.addSound.bind(this.props.vm);
         this.props.vm.addSound = async (sound, idx="AMONGUSLMAO") => {
+            console.log("SOUND", sound)
             const name = idx == "AMONGUSLMAO" ? this.props.vm.editingTarget.sprite.name : this.props.vm.runtime.getTargetById(idx).sprite.name;
             const msg = {sound: sound, spriteName: name};
             return channel.publish('addSound', JSON.stringify(msg));
@@ -1089,17 +1497,7 @@ class Blocks extends React.Component {
             this.props.vm.emitTargetsUpdate();
         })
 
-        this.props.vm.deleteCostume = async (costumeIndex) => {
-            const spriteName = this.props.vm.editingTarget.sprite.name
-            const msg = {costumeIndex: costumeIndex, spriteName: spriteName};
-            const ret = await channel.publish('deleteCostume', JSON.stringify(msg));
-            return ret;
-        }
-        channel.subscribe('deleteCostume', (message) => {
-            const data = JSON.parse(message.data);
-            const costumeIndex = data.costumeIndex;
-            // getTargetForStage
-            const target = this.getTargetByName(data.spriteName)
+        const deleteCostume = function(costumeIndex, target) {
             console.log("deleted costume", costumeIndex, target)
             const deletedCostume = target.deleteCostume(costumeIndex);
             if (deletedCostume) {
@@ -1110,17 +1508,39 @@ class Blocks extends React.Component {
                 };
             }
             return null;
+        }.bind(this.props.vm)
+        this.props.vm.deleteCostume = async (costumeIndex) => {
+            const spriteName = this.props.vm.editingTarget.sprite.name
+            const msg = {costumeIndex: costumeIndex, spriteName: spriteName, uid: nid};
+            channel.publish('deleteCostume', JSON.stringify(msg));
+            return deleteCostume(costumeIndex, this.props.vm.editingTarget);
+        }
+        channel.subscribe('deleteCostume', (message) => {
+            const data = JSON.parse(message.data);
+            if (data.uid == nid) {return}
+            const costumeIndex = data.costumeIndex;
+            const target = this.getTargetByName(data.spriteName)
+            deleteCostume(costumeIndex, target);
         });
 
-        let ogAddCostumeFromLibrary = this.props.vm.addCostumeFromLibrary.bind(this.props.vm);
-        this.props.vm.addCostumeFromLibrary = async (md5, costumeOBject) => {
-            const msg = {md5: md5, costumeOBject: costumeOBject};
-            return channel.publish('addCostumeFromLibrary', JSON.stringify(msg));
-        }
-        channel.subscribe('addCostumeFromLibrary', (message) => {
-            const d = JSON.parse(message.data);
-            ogAddCostumeFromLibrary(d.md5, d.costumeOBject);
-        })
+        // let ogAddCostumeFromLibrary = function (md5ext, costumeObject, optId=null) {
+        //     // TODO: reject with an Error (possible breaking API change!)
+        //     // eslint-disable-next-line prefer-promise-reject-errors
+        //     if (!this.editingTarget) return Promise.reject();
+        //     if (optId==null) {
+        //         optId = this.editingTarget.id;
+        //     }
+        //     return this.addCostume(md5ext, costumeObject, optId, 2 /* optVersion */);
+        // }.bind(this.props.vm)
+        // this.props.vm.addCostumeFromLibrary = async (md5, costumeOBject) => {
+        //     const msg = {md5: md5, costumeOBject: costumeOBject, spriteName: this.props.vm.editingTarget.sprite.name};
+        //     return channel.publish('addCostumeFromLibrary', JSON.stringify(msg));
+        // }
+        // channel.subscribe('addCostumeFromLibrary', (message) => {
+        //     const d = JSON.parse(message.data);
+        //     const id = this.getTargetByName(d.spriteName).id;
+        //     ogAddCostumeFromLibrary(d.md5, d.costumeOBject, id);
+        // })
 
         let ogDupeCostume = this.props.vm.duplicateCostume.bind(this.props.vm);
         this.props.vm.duplicateCostume = async (costumeIndex) => {
@@ -1146,14 +1566,100 @@ class Blocks extends React.Component {
             this.getTargetByName(data.spriteName).setCostume(data.costumeIndex);
         })
 
-        let ogAddCostume = this.props.vm.addCostume.bind(this.props.vm);
-        this.props.vm.addCostume = function(md5, costumeOBject, optTarget, optVersion) {
-            const msg = {md5: md5, costumeOBject: costumeOBject, optTarget: optTarget, optVersion: optVersion};
-            return channel.publish('addCostume', JSON.stringify(msg));
+        
+        const decodeSvg = (data) => {
+            let svgString = '';
+        
+            for (let i = 0; i < Object.keys(data).length; i++) {
+                svgString += String.fromCharCode(data[i]);
+            }
+    
+            return svgString;
         }
-        channel.subscribe('addCostume', (message) => {
+        const decodePng = (data) => {
+    
+            const byteNumbers = Object.values(data);
+            const byteArray = new Uint8Array(byteNumbers);
+
+            // Convert byteArray to a binary string
+            let binaryString = '';
+            for (let i = 0; i < byteArray.length; i += 0x8000) {
+                binaryString += String.fromCharCode.apply(null, byteArray.subarray(i, i + 0x8000));
+            }
+
+            // Convert binary string to base64
+            return btoa(binaryString);
+    
+        }
+
+        let ogAddCostume = this.props.vm.addCostume.bind(this.props.vm);
+        this.props.vm.addCostume = function(md5, costumeObject, optTarget, optVersion) {
+            
+            console.log("ADDING COSTUME", md5, costumeObject, optTarget, optVersion)
+            
+            const as = costumeObject.asset;
+            console.log("ASSET", as)
+            if (this.hasLoadedFully) {
+
+                if (costumeObject.asset == undefined) {
+                    const spriteName = optTarget ? this.props.vm.runtime.getTargetById(optTarget).sprite.name : this.props.vm.editingTarget.sprite.name;
+                    const msg = {md5: md5, costumeObject: costumeObject, spriteName: spriteName, optVersion: optVersion, uid:nid};
+
+                    channel.publish('addCostume', JSON.stringify(msg))
+                    return ogAddCostume(md5, costumeObject, optTarget, optVersion);
+                }
+                
+                var fileContent
+                var contentType
+                
+                if (costumeObject.dataFormat === 'svg') {
+                    fileContent = decodeSvg(costumeObject.asset.data);
+                    contentType = 'image/svg+xml';
+                } else {
+                    fileContent = decodePng(costumeObject.asset.data);
+                    contentType = 'image/png';
+                }
+
+                fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=" + md5 + "&cd=attachment", {
+                    method: 'POST',
+                    headers: {
+                        'Accept': '*/*',
+                        'Connection': 'keep-alive',
+                        'Content-Type': contentType,
+                        'Content-Disposition': 'attachment',
+                    },
+                    body: fileContent,
+                }).then((resp) => {
+                    console.log(resp)
+
+                    console.log("data", costumeObject.asset.data)
+                    // costumeObject.asset.data = []
+
+                    const spriteName = optTarget ? this.props.vm.runtime.getTargetById(optTarget).sprite.name : this.props.vm.editingTarget.sprite.name;
+                    const msg = {md5: md5, costumeObject: costumeObject, spriteName: spriteName, optVersion: optVersion, uid:nid};
+                    channel.publish('addCostume', JSON.stringify(msg))
+                });
+            }
+            return ogAddCostume(md5, costumeObject, optTarget, optVersion);
+        }.bind(this)
+        channel.subscribe('addCostume', async (message) => {
             const d = JSON.parse(message.data);
-            ogAddCostume(d.md5, d.costumeOBject, d.optTarget, d.optVersion);
+            if (d.uid == nid) {return}
+
+            // const resp = await fetch("https://d3pl0tx5n82s71.cloudfront.net/"+d.md5)
+            // const extension = d.dataFormat
+            // if (extension == "svg") {
+            //     const svgString = await resp.text();
+            //     d.costumeObject.asset.data = svgString;
+            // } else {
+            //     const pngData = await resp.arrayBuffer();
+            //     d.costumeObject.asset.data = new Uint8Array(Buffer.from(pngData, 'base64'));
+            // }
+
+            console.log("ADDING COSTUME", d)
+            const targetId = this.getTargetByName(d.spriteName).id;
+
+            ogAddCostume(d.md5, d.costumeObject, targetId, d.optVersion);
         })
 
         // this.props.vm.createVariable = function(id,name,type,isCloud) {
@@ -1162,12 +1668,82 @@ class Blocks extends React.Component {
         //     // return channel.publish('createVariable', JSON.stringify(msg));
         // }
 
+        const ogRenameVarById = this.workspace.renameVariableById.bind(this.workspace);
+        this.workspace.renameVariableById = function(id, newName) {
+            const msg = {id: id, newName: newName};
+            channel.publish('renameVarById', JSON.stringify(msg));
+        }
+        channel.subscribe('renameVarById', (message) => {
+            const d = JSON.parse(message.data);
+            ogRenameVarById(d.id, d.newName);
+        })
+
+        const ogDeleteVarById = this.workspace.deleteVariableById.bind(this.workspace);
+        this.workspace.deleteVariableById = function(id) {
+            channel.publish('deleteVarById', JSON.stringify(id));
+        }
+        channel.subscribe('deleteVarById', (message) => {
+            ogDeleteVarById(JSON.parse(message.data));
+        })
+
+        const ogDeleteVarInternal = this.workspace.deleteVariableInternal_.bind(this.workspace);
+        this.workspace.deleteVariableInternal_ = function(variable, uses) {
+            const msg = {variable: variable, uses: uses};
+            channel.publish('deleteVarInternal', JSON.stringify(msg));
+        }
+        channel.subscribe('deleteVarInternal', (message) => {
+            const d = JSON.parse(message.data);
+            ogDeleteVarInternal(d.variable, d.uses);
+        })
+
+        this.workspace.undo = function(redo) {
+            return
+            var inputStack = redo ? this.workspace.redoStack_ : this.workspace.undoStack_;
+            var outputStack = redo ? this.workspace.undoStack_ : this.workspace.redoStack_;
+            var inputEvent = inputStack.pop();
+            if (!inputEvent) {
+                return;
+            }
+            var events = [inputEvent];
+            // Do another undo/redo if the next one is of the same group.
+            while (inputStack.length && inputEvent.group &&
+                inputEvent.group == inputStack[inputStack.length - 1].group) {
+                events.push(inputStack.pop());
+            }
+            // Push these popped events on the opposite stack.
+            for (var i = 0, event; event = events[i]; i++) {
+                outputStack.push(event);
+            }
+            events = this.ScratchBlocks.Events.filter(events, redo);
+            this.ScratchBlocks.Events.recordUndo = false;
+            if (this.ScratchBlocks.selected) {
+                this.ScratchBlocks.Events.disable();
+                try {
+                    this.ScratchBlocks.selected.unselect();
+                } finally {
+                    this.ScratchBlocks.Events.enable();
+                }
+            }
+            try {
+                var emissionArray = []
+                for (var i = 0, event; event = events[i]; i++) {
+                    emissionArray.push(event.toJson());
+                }
+                this.sendArray(emissionArray, -1, -1, redo);
+                for (var i = 0, event; event = events[i]; i++) {
+                    event.run(redo);
+                }
+            } finally {
+                this.ScratchBlocks.Events.recordUndo = true;
+            }
+        }.bind(this);
+
         const ogCreateVar = this.workspace.createVariable.bind(this.workspace);
         this.workspace.createVariable = function(name, opt_type, opt_id, opt_isLocal, opt_isCloud) {
             //console.log("VARIABLE MADE", name)
-            ogCreateVar(name, opt_type, opt_id, opt_isLocal, opt_isCloud);
             const msg = {name: name, opt_type: opt_type, opt_id: opt_id, opt_isLocal: opt_isLocal, opt_isCloud: opt_isCloud, uid:nid};
             channel.publish('createVariable', JSON.stringify(msg));
+            return ogCreateVar(name, opt_type, opt_id, opt_isLocal, opt_isCloud);
         }
         channel.subscribe('createVariable', (message) => {
             const d = JSON.parse(message.data);
@@ -1175,15 +1751,92 @@ class Blocks extends React.Component {
             ogCreateVar(d.name, d.opt_type, d.opt_id, d.opt_isLocal, d.opt_isCloud);
         })
 
+        // TODO: handle right click events
+        const ogShowContextMenu = this.ScratchBlocks.ContextMenu.show.bind(this.ScratchBlocks.ContextMenu);
+        this.ScratchBlocks.ContextMenu.show = function(a,arrayOfChoices,c) {
+
+            const newChoices = []
+            for (let i = 0; i < arrayOfChoices.length; i++) {
+                const choice = arrayOfChoices[i];
+                if (choice.text == "Add Comment") {
+                    newChoices.push(choice)
+                }
+            }
+
+            ogShowContextMenu(a,newChoices,c);
+            console.log("CONTEXT MENU", a,arrayOfChoices,c)
+        }
+
         // this.workspace.prototype.createVariable = function(id,name,sf,type,isCloud) {
         //     console.log("MADE VARIABLE")
         // }
 
-        this.props.vm.updateSvg = function (costumeIndex, svg, rotationCenterX, rotationCenterY, targetName = "") {
-            //console.log(this)
+        
+        this.props.vm.updateBitmap = function(costumeIndex, bitmap, rotationCenterX, rotationCenterY, bitmapResolution, targetName = "") {
             var target;
             if (targetName == "")
                 target = this.editingTarget
+            else 
+                target = this.runtime.getSpriteTargetByName(targetName);
+            const costume = target.getCostumes()[costumeIndex];
+            if (!(costume && this.runtime && this.runtime.renderer)) return;
+            if (costume && costume.broken) delete costume.broken;
+    
+            costume.rotationCenterX = rotationCenterX;
+            costume.rotationCenterY = rotationCenterY;
+    
+            // If the bitmap originally had a zero width or height, use that value
+            const bitmapWidth = bitmap.sourceWidth === 0 ? 0 : bitmap.width;
+            const bitmapHeight = bitmap.sourceHeight === 0 ? 0 : bitmap.height;
+            // @todo: updateBitmapSkin does not take ImageData
+            const canvas = document.createElement('canvas');
+            canvas.width = bitmapWidth;
+            canvas.height = bitmapHeight;
+            const context = canvas.getContext('2d');
+            context.putImageData(bitmap, 0, 0);
+    
+            // Divide by resolution because the renderer's definition of the rotation center
+            // is the rotation center divided by the bitmap resolution
+            this.runtime.renderer.updateBitmapSkin(
+                costume.skinId,
+                canvas,
+                bitmapResolution,
+                [rotationCenterX / bitmapResolution, rotationCenterY / bitmapResolution]
+            );
+    
+            // @todo there should be a better way to get from ImageData to a decodable storage format
+            canvas.toBlob(blob => {
+                const reader = new FileReader();
+                reader.addEventListener('loadend', () => {
+                    const storage = this.runtime.storage;
+                    costume.dataFormat = storage.DataFormat.PNG;
+                    costume.bitmapResolution = bitmapResolution;
+                    costume.size = [bitmapWidth, bitmapHeight];
+                    costume.asset = storage.createAsset(
+                        storage.AssetType.ImageBitmap,
+                        costume.dataFormat,
+                        Buffer.from(reader.result),
+                        null, // id
+                        true // generate md5
+                    );
+                    costume.assetId = costume.asset.assetId;
+                    costume.md5 = `${costume.assetId}.${costume.dataFormat}`;
+                    this.emitTargetsUpdate();
+                });
+                // Bitmaps with a zero width or height return null for their blob
+                if (blob){
+                    reader.readAsArrayBuffer(blob);
+                }
+            });
+        }.bind(this.props.vm);
+
+        this.props.vm.updateSvg = function (costumeIndex, svg, rotationCenterX, rotationCenterY, targetName = "") {
+            var target;
+            console.log(targetName)
+            if (targetName == "")
+                target = this.editingTarget
+            else if (targetName == "Stage")
+                target = this.runtime.getTargetForStage();
             else 
                 target = this.runtime.getSpriteTargetByName(targetName);
             const costume = target.getCostumes()[costumeIndex];
@@ -1249,7 +1902,6 @@ class Blocks extends React.Component {
         // }
 
         //console.log("WHAT", this.props.vm.runtime.defaultBlockPackages.scratch3_motion)
-
         
         const ogWResize = this.workspace.resizeContents.bind(this.workspace);
         this.workspace.resizeContents = function () {
@@ -1268,6 +1920,68 @@ class Blocks extends React.Component {
             }
             ogClear();
         }.bind(this)
+
+        const ogScroll = this.workspace.scrollbar.resize.bind(this.workspace.scrollbar);
+        this.workspace.scrollbar.resize = function () {
+            if (this.pauseWorkspaceUpdate) {
+                return;
+            }
+            ogScroll();
+        }.bind(this)
+
+        const ogEmitTargetsUpdate = this.props.vm.emitTargetsUpdate.bind(this.props.vm);
+        this.props.vm.emitTargetsUpdate = function (boolopt) {
+            if (this.pauseWorkspaceUpdate) {
+                return;
+            }
+            ogEmitTargetsUpdate(boolopt);
+        }.bind(this)
+        
+        const ogUpdateScroll = this.workspace.scrollbar.set.bind(this.workspace.scrollbar)
+        this.workspace.scrollbar.set = function (x,y) {
+            if (this.pauseWorkspaceUpdate) {
+                return
+            }
+            ogUpdateScroll(x,y)
+        }.bind(this)
+
+        console.log("STORAGE", this.props.vm.runtime.storage)
+        console.log("ASSETTOOL", this.props.vm.runtime.storage.webHelper.assetTool)
+        const ogRuntimeImageLoad = this.props.vm.runtime.storage.load.bind(this.props.vm.runtime.storage);
+        this.props.vm.runtime.storage.load = function(a,b,c) {
+            console.log("LOADING FROM VM", a,b,c);
+            return ogRuntimeImageLoad(a,b,c);
+        }
+
+        function extractNumberFromUrl(url) {
+            const baseUrl = "https://assets.scratch.mit.edu/internalapi/asset/";
+            // Remove the initial part of the URL
+            let trimmedUrl = url.replace(baseUrl, '');
+            // Split the remaining part of the URL by '.' and get the first index
+            let number = trimmedUrl.split('.')[0];
+            // Return the extracted number
+            return number;
+        }
+
+        const ogGet = this.props.vm.runtime.storage.webHelper.assetTool.get.bind(this.props.vm.runtime.storage.webHelper.assetTool)
+        this.props.vm.runtime.storage.webHelper.assetTool.get = function({url, ...options}) {
+            // const md5 = extractNumberFromUrl(url)
+            // console.log("MD5", md5)
+            // if (md5 != "-1") {
+            //     fetch(`http://scratch-images.s3-website.us-east-2.amazonaws.com/${md5}.svg`).then((response) => {"EARNERING", console.log(response)})
+            //     console.log(url)
+            //     console.log(url, options)
+            // }
+            // fetch(url).then((response) => {"RESPONDING",console.log(response)})
+            return fetch(url, Object.assign({method: 'GET', "Connection": "keep-alive", "Accept": "*/*"}, options))
+                .then(result => {
+                    // result.arrayBuffer().then(b => {const r = new Uint8Array(b);  console.log("MAGIK",url,b,r)})
+                    console.log("RES", result)
+                    if (result.ok) return result.arrayBuffer().then(b => new Uint8Array(b));
+                    if (result.status === 404) return null;
+                    return Promise.reject(result.status); // TODO: we should throw a proper error
+                });
+        }
 
         this.ScratchBlocks.Xml.domToBlock = function(xmlBlock, workspace) {
             //const swappingWorkspaces = this.workspace.id == workspace.id && this.pauseWorkspaceUpdate;
@@ -1336,8 +2050,6 @@ class Blocks extends React.Component {
             return topBlock;
           }.bind(this);
 
-
-        this.initInformation.bind(this)();
         //this.props.vm.clearFlyoutBlocks()
     }
 
@@ -1368,7 +2080,7 @@ class Blocks extends React.Component {
         }
         await this.save();
         console.log("JOINED!!")
-        await channel.publish('goodForLoad', "");
+        await channel.publish('goodForLoad', JSON.stringify({uid: nid}) );
         // console.log(this.props.vm.runtime.execute.blockUtility)
         // this.props.vm.runtime.execute.blockUtility.ioQuery('clock', 'resetProjectTimer')
     }
@@ -1585,6 +2297,11 @@ class Blocks extends React.Component {
         this.handleExtensionAdded(categoryInfo);
     }
     handleCategorySelected (categoryId) {
+        console.log("ARAIREORE")
+        channel.publish('categorySelected', JSON.stringify(categoryId));
+    }
+    parseCategorySelected (msg) {
+        const categoryId = JSON.parse(msg.data);
         const extension = extensionData.find(ext => ext.extensionId === categoryId);
         if (extension && extension.launchPeripheralConnectionFlow) {
             this.handleConnectionModalStart(categoryId);
@@ -1692,6 +2409,7 @@ class Blocks extends React.Component {
             workspaceMetrics,
             ...props
         } = this.props;
+        console.log("PROPS", this.props)
         /* eslint-enable no-unused-vars */
         return (
             <React.Fragment>
@@ -1714,7 +2432,7 @@ class Blocks extends React.Component {
                         onOk={this.handlePromptCallback}
                     />
                 ) : null}
-                {extensionLibraryVisible ? (
+                {false ? (
                     <ExtensionLibrary
                         vm={vm}
                         onCategorySelected={this.handleCategorySelected}

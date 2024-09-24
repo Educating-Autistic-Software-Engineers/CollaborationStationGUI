@@ -90,7 +90,7 @@ const PromptComponent = props => (
                             <label
                                 className={classNames({[styles.disabledLabel]: props.cloudSelected})}
                             >
-                                <input
+                                {/* <input
                                     checked={!props.globalSelected}
                                     disabled={props.cloudSelected}
                                     name="variableScopeOption"
@@ -100,7 +100,7 @@ const PromptComponent = props => (
                                 />
                                 <FormattedMessage
                                     {...messages.forThisSpriteMessage}
-                                />
+                                /> */}
                             </label>
                         </Box>}
                     {props.showCloudOption ?

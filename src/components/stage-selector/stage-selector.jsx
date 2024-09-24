@@ -98,15 +98,16 @@ const StageSelector = props => {
                 className={styles.addButton}
                 img={backdropIcon}
                 moreButtons={[
+                    // {
+                    //     title: intl.formatMessage(messages.addBackdropFromFile),
+                    //     img: fileUploadIcon,
+                    //     onClick: onBackdropFileUploadClick,
+                    //     fileAccept: '.svg, .png, .bmp, .jpg, .jpeg, .gif',
+                    //     fileChange: onBackdropFileUpload,
+                    //     fileInput: fileInputRef,
+                    //     fileMultiple: true
+                    // }, 
                     {
-                        title: intl.formatMessage(messages.addBackdropFromFile),
-                        img: fileUploadIcon,
-                        onClick: onBackdropFileUploadClick,
-                        fileAccept: '.svg, .png, .bmp, .jpg, .jpeg, .gif',
-                        fileChange: onBackdropFileUpload,
-                        fileInput: fileInputRef,
-                        fileMultiple: true
-                    }, {
                         title: intl.formatMessage(messages.addBackdropFromSurprise),
                         img: surpriseIcon,
                         onClick: onSurpriseBackdropClick

@@ -26,6 +26,7 @@ const messages = defineMessages({
     }
 });
 
+
 const ALL_TAG = {tag: 'all', intlLabel: messages.allTag};
 const tagListPrefix = [ALL_TAG];
 
@@ -136,7 +137,124 @@ class LibraryComponent extends React.Component {
     handleFilterClear () {
         this.setState({filterQuery: ''});
     }
+    async fetchAndUploadFile(md5, imageUrl, uploadApiUrl) {
+        try {
+            // Determine the file extension
+            const extension = md5.split('.').pop().toLowerCase();
+            
+            // Fetch the file from the API
+            const response = await fetch(imageUrl);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch file. Status code: ${response.status}`);
+            }
+            
+            let fileContent;
+            let contentType;
+
+            // Get the file content and determine content type
+            if (extension === 'svg') {
+                fileContent = await response.text();
+                contentType = 'image/svg+xml';
+            } else if (extension === 'png') {
+                fileContent = await response.blob();
+                contentType = 'image/png';
+            
+                const arrayBuffer = await fileContent.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                let binaryString = '';
+                for (let i = 0; i < uint8Array.length; i++) {
+                    binaryString += String.fromCharCode(uint8Array[i]);
+                }
+                fileContent = btoa(binaryString);
+            } else {
+                throw new Error('Unsupported file type');
+            }
+            
+            console.log("ext", extension, 'data', fileContent)
+            
+            // Upload the file to the upload API
+            const uploadResponse = await fetch(uploadApiUrl + "&cd=attachment", {
+                method: 'POST',
+                headers: {
+                    'Accept': '*/*',
+                    'Connection': 'keep-alive',
+                    'Content-Type': contentType,
+                    'Content-Disposition': 'attachment',
+                },
+                body: fileContent,
+            });
+            
+            if (!uploadResponse.ok) {
+                throw new Error(`Failed to upload file. Status code: ${uploadResponse.status}`);
+            }
+            
+            const responseBody = await uploadResponse.text();
+            console.log('Upload API response:', responseBody, uploadResponse);
+        } catch (error) {
+            console.error('Error:', error);
+        }
+    }
+    async fetchAndUploadWAV (fileUrl, uploadApiUrl) {
+        try {
+            // Fetch the WAV file from the API
+            const response = await fetch(fileUrl);
+            console.log("rha", fileUrl, response)
+            if (!response.ok) {
+                throw new Error(`Failed to fetch file. Status code: ${response.status}`);
+            }
+        
+            // Get the WAV content as a Buffer
+            const arrayBuffer = await response.arrayBuffer();
+            // const wavBuffer = new Uint8Array(arrayBuffer); 
+            const base64String = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+        
+            
+            // Upload the WAV to the upload API
+            const uploadResponse = await fetch(uploadApiUrl + "&cd=attachment", {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': '*/*',
+                },
+                body: JSON.stringify({ file: base64String }),
+            });
+        
+            if (!uploadResponse.ok) {
+                throw new Error(`Failed to upload file. Status code: ${uploadResponse.status}`);
+            }
+        
+            const responseBody = await uploadResponse.text();
+            console.log('Upload API response:', responseBody);
+        } catch (error) {
+            console.error('Error:', error);
+        }
+    };
+    async uploadFiles() {
+        let costumes = []
+        console.log(this.props.data)
+        for (const costume of this.props.data) {
+            try {
+                await this.fetchAndUploadWAV(
+                    // costume._md5,
+                    `https://cdn.assets.scratch.mit.edu/internalapi/asset/${costume._md5}/get/`,
+                    "https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName="+costume._md5
+                )
+            } catch (error) {
+                console.error('Error:', error);
+                return
+            }
+        }
+        return
+        const res2 = fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/assetID",{
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(costumes)
+        })
+    }
     getFilteredData () {
+        // this.uploadFiles();
         if (this.state.selectedTag === 'all') {
             if (!this.state.filterQuery) return this.props.data;
             return this.props.data.filter(dataItem => (

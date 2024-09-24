@@ -16,10 +16,11 @@ const clampPosition = (position, maxPosition, elementSize) => {
     return Math.max(0, Math.min(position, maxPosition - elementSize));
 };
 
-const YourCursor = ({ self, name }) => {
+const YourCursor = ({ self, name, websocket }) => {
     const [position, setPosition] = useState({ x: 0, y: 0 });
     const latestPosition = useRef(position);
     let cachedPosition = { x: 0, y: 0 };
+    let emitIndex = 0;
 
     thisName = name
 
@@ -36,6 +37,8 @@ const YourCursor = ({ self, name }) => {
         window.addEventListener('mousemove', handleMouseMove);
 
         const intervalId = setInterval(() => {
+
+            if (!websocket) {return}
 
             const tabIndex = sessionStorage.getItem("activeTabIndex")
             const blockRect = JSON.parse(sessionStorage.getItem('blocksRect'))
@@ -56,8 +59,13 @@ const YourCursor = ({ self, name }) => {
 
             //console.log(document.getElementById('totalsize').getBoundingClientRect());
 
-            channel.publish('cursor', JSON.stringify({ 
+            // console.log("SENDING!!!", globalPosition)
+            // console.log(ablySpace, name)
+            websocket.send(JSON.stringify({
+                action: "cursorMessage",
                 target: sessionStorage.getItem("editingTarget"), 
+                room: ablySpace,
+                emitIndex: emitIndex++,
                 tabIndex: tabIndex,
                 clientId: name, 
                 position: globalPosition, 
@@ -66,7 +74,7 @@ const YourCursor = ({ self, name }) => {
                 ogWindow: {innerWidth: window.innerWidth, innerHeight: window.innerHeight},
                 rect: sessionStorage.getItem("blocksRect")
             }));
-        }, 200);
+        }, 65);
 
         // Cleanup the event listener and interval on component unmount
         return () => {
@@ -100,89 +108,101 @@ const YourCursor = ({ self, name }) => {
     );
 };
 
-const hashCode = function(s) {
-    return s.split("").reduce(function(a, b) {
-        a = ((a << 5) - a) + b.charCodeAt(0);
-        return a & a;
-    }, 0);
-}
-
-const MemberCursors = () => {
+const MemberCursors = ({ websocket }) => {
     const [cursors, setCursors] = useState({});
+    let highestEmitIndices = {};
 
     useEffect(() => {
+        if (!websocket) {
+            console.warn('WebSocket is not defined');
+            return;
+        }
+
         const handleCursorMessage = (message) => {
-            const { clientId, position, hovering, target, color, tabIndex, ogWindow, rect } = JSON.parse(message.data);
+            // console.log(message)
+            try {
+                const { rect } = JSON.parse(message.data);
+                JSON.parse(rect);
+            } catch (e) {
+                // console.log(e, message.data)
+                return;
+            }
+            const { clientId, position, hovering, emitIndex, target, color, tabIndex, ogWindow, rect } = JSON.parse(message.data);
+            
+            if (emitIndex < highestEmitIndices[clientId]) return;
+            highestEmitIndices[clientId] = emitIndex;
+
+            // console.log(thisName, clientId)
             if (clientId === thisName) return;
 
-            const ogRect = JSON.parse(rect)
-            const blockRect = JSON.parse(sessionStorage.getItem('blocksRect'))
+            const ogRect = JSON.parse(rect);
+            const blockRect = JSON.parse(sessionStorage.getItem('blocksRect'));
 
             let isInvisible = false;
-            const dragOffset = JSON.parse(sessionStorage.getItem("dragRelative"))
-            const dragPos = hovering && !(position.x + dragOffset.x < 312) ? dragOffset : {x: 0, y: 0};
-            let relposition = { x: position.x + dragPos.x, y: position.y + dragPos.y};
-            //console.log('rel', relposition)
-
-            // top left is (312, 90)
-            //relposition.x < 312 || relposition.y < 90
+            const dragOffset = JSON.parse(sessionStorage.getItem("dragRelative"));
+            const dragPos = hovering && !(position.x + dragOffset.x < 312) ? dragOffset : { x: 0, y: 0 };
+            let relposition = { x: position.x + dragPos.x, y: position.y + dragPos.y };
 
             if (hovering) {
                 if (relposition.x < blockRect.x || relposition.y < blockRect.y || relposition.x > blockRect.right || relposition.y > blockRect.bottom) {
                     isInvisible = true;
                 }
             } else {
-                const xScale = (window.innerWidth - blockRect.right)/(ogWindow.innerWidth - ogRect.right)
-                relposition.x = (relposition.x - ogRect.right) * xScale + blockRect.right
+                const xScale = (window.innerWidth - blockRect.right) / (ogWindow.innerWidth - ogRect.right);
+                relposition.x = (relposition.x - ogRect.right) * xScale + blockRect.right;
             }
 
-            if (target != sessionStorage.getItem("editingTarget") || sessionStorage.getItem("activeTabIndex") != tabIndex) {
+            if (target !== sessionStorage.getItem("editingTarget") || sessionStorage.getItem("activeTabIndex") !== tabIndex) {
                 isInvisible = true;
             }
 
-            const actualColor = isInvisible ? "#ffffff00" : color
+            const actualColor = isInvisible ? "#ffffff00" : color;
             setCursors(prevCursors => ({
                 ...prevCursors,
                 [clientId]: { relposition, cursorColor: actualColor, name: clientId }
             }));
         };
 
-        channel.subscribe('cursor', handleCursorMessage);
+        websocket.onmessage = handleCursorMessage;
 
         // Cleanup the subscription on component unmount
         return () => {
-            channel.unsubscribe('cursor', handleCursorMessage);
+            websocket.onmessage = null;
         };
-    }, []);
+    }, [websocket]);
+
+    const clampPosition = (position, max, cursorSize) => {
+        return Math.max(0, Math.min(position, max - cursorSize));
+    };
+
+    const cursorWidth = 20; // Define cursor width if needed
+    const cursorHeight = 20; // Define cursor height if needed
 
     return (
         <>
-          {Object.values(cursors).map((member, index) => {
-    
-            // Get the viewport dimensions
-            const viewportWidth = window.innerWidth;
-            const viewportHeight = window.innerHeight;
-    
-            // Clamp the positions
-            const clampedX = clampPosition(member.relposition.x, viewportWidth, cursorWidth);
-            const clampedY = clampPosition(member.relposition.y, viewportHeight, cursorHeight);
-    
-            return (
-              <div
-                key={index}
-                className={styles.cursor}
-                style={{
-                  top: `${clampedY}px`,
-                  left: `${clampedX}px`,
-                }}
-              >
-                <CursorSvg cursorColor={member.cursorColor} />
-                <div style={{ backgroundColor: member.cursorColor }} className={styles.cursorName}>
-                  {member.cursorColor === "#ffffff00" ? "" : member.name}
-                </div>
-              </div>
-            );
-          })}
+            {Object.values(cursors).map((member, index) => {
+                const viewportWidth = window.innerWidth;
+                const viewportHeight = window.innerHeight;
+
+                const clampedX = clampPosition(member.relposition.x, viewportWidth, cursorWidth);
+                const clampedY = clampPosition(member.relposition.y, viewportHeight, cursorHeight);
+
+                return (
+                    <div
+                        key={index}
+                        className={styles.cursor}
+                        style={{
+                            top: `${clampedY}px`,
+                            left: `${clampedX}px`,
+                        }}
+                    >
+                        <CursorSvg cursorColor={member.cursorColor} />
+                        <div style={{ backgroundColor: member.cursorColor }} className={styles.cursorName}>
+                            {member.cursorColor === "#ffffff00" ? "" : member.name}
+                        </div>
+                    </div>
+                );
+            })}
         </>
     );
 };

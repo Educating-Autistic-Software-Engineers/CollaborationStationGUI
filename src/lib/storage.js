@@ -14,26 +14,27 @@ class Storage extends ScratchStorage {
     }
     async updateCustomAssets() {
         this.assets = {}
-        const response = await fetch("https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/assetID",{
-            method: 'GET'
-        })
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder('utf-8');
-        let chunks = [];
-        while (true) {
-            const { done, value } = await reader.read();
-            if (done) {
-                break;
-            }
-            chunks.push(value);
-        }
-        const concatenated = new Uint8Array(chunks.reduce((acc, chunk) => acc.concat(Array.from(chunk)), []));
-        const jsonString = decoder.decode(concatenated);
-        const data = JSON.parse(JSON.parse(jsonString));
-        for (const asset of data) {
-            console.log(asset)
-            this.assets[asset.assetID] = asset;
-        }
+        // const response = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/assetID",{
+        //     method: 'GET'
+        // })
+        // const reader = response.body.getReader();
+        // const decoder = new TextDecoder('utf-8');
+        // let chunks = [];
+        // while (true) {
+        //     const { done, value } = await reader.read();
+        //     if (done) {
+        //         break;
+        //     }
+        //     chunks.push(value);
+        // }
+        // const concatenated = new Uint8Array(chunks.reduce((acc, chunk) => acc.concat(Array.from(chunk)), []));
+        // const jsonString = decoder.decode(concatenated);
+        // console.log("ASSETIDS", jsonString)
+        // const data = JSON.parse(JSON.parse(jsonString));
+        // for (const asset of data) {
+        //     // console.log(asset)
+        //     this.assets[asset.assetID] = asset;
+        // }
     }
     addOfficialScratchWebStores () {
         this.addWebStore(
@@ -80,15 +81,23 @@ class Storage extends ScratchStorage {
         };
     }
     setAssetHost (assetHost) {
+        console.log("ASSETHOST", assetHost)
         this.assetHost = assetHost;
     }
     getAssetGetConfig (asset) {
-        console.log(this.assets, asset)
-        if (asset.assetId in this.assets) {
-            return `https://rqzsni63s5.execute-api.us-east-2.amazonaws.com/scratch/images?fileName=${asset.assetId}.${asset.dataFormat}`
-        }
-        return `${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`;
-        console.log(`loading >> ${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`)
+        console.log(`${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`)
+        // console.log(`${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`)
+        // if (asset.dataFormat == "wav")
+        //     return `${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`;
+        // return "https://cdn.assets.scratch.mit.edu/internalapi/asset/" + asset.assetId + "." + asset.dataFormat + "/get/";
+        // console.log(`${this.assetHost}/internalapi/${asset.assetId}.${asset.dataFormat}`)
+        // return `${this.assetHost}/internalapi/${asset.assetId}.${asset.dataFormat}/get/`;
+        // if (asset.dataFormat === "svg")
+        //     return "https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=390845c11df0924f3b627bafeb3f814e.svg"
+        // console.log(`https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=${asset.assetId}.${asset.dataFormat}`)
+        console.log(`https://d3pl0tx5n82s71.cloudfront.net/${asset.assetId}.${asset.dataFormat}`)
+        return `https://d3pl0tx5n82s71.cloudfront.net/${asset.assetId}.${asset.dataFormat}`
+        // return `https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=${asset.assetId}.${asset.dataFormat}`
     }
     getAssetCreateConfig (asset) {
         return {

@@ -141,6 +141,26 @@ class SoundEditor extends React.Component {
             playhead: null
         });
     }
+    uploadSound(soundIndex, wavBuffer) {
+        const sound = this.props.vm.editingTarget.sprite.sounds[soundIndex];
+        const md5 = sound.md5;
+
+        const uploadApiUrl = "https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName="+md5;
+
+        const base64String = btoa(String.fromCharCode(...new Uint8Array(wavBuffer)));
+            
+        // Upload the WAV to the upload API
+        fetch(uploadApiUrl + "&cd=attachment", {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Accept': '*/*',
+            },
+            body: JSON.stringify({ file: base64String }),
+        }).then(response => {
+            console.log("response", response);
+        });
+    }
     submitNewSamples (samples, sampleRate, skipUndo) {
         return downsampleIfNeeded({samples, sampleRate}, this.resampleBufferToRate)
             .then(({samples: newSamples, sampleRate: newSampleRate}) =>
@@ -160,6 +180,7 @@ class SoundEditor extends React.Component {
                         this.props.soundIndex,
                         this.audioBufferPlayer.buffer,
                         new Uint8Array(wavBuffer));
+                    this.uploadSound(this.props.soundIndex, wavBuffer);
                     return true; // Edit was successful
                 })
             )

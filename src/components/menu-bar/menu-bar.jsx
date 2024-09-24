@@ -108,7 +108,7 @@ const MenuBarItemTooltip = ({
     id,
     place = 'bottom'
 }) => {
-    if (enable) {
+    if (id == "account-nav" || id == "mystuff") {
         return (
             <React.Fragment>
                 {children}
@@ -790,6 +790,7 @@ class MenuBar extends React.Component {
                         <React.Fragment>
                             {this.props.showComingSoon ? (
                                 <React.Fragment>
+                                    {sessionStorage.getItem('viewMode')=="T" ? <div></div> : <>
                                     <MenuBarItemTooltip id="mystuff">
                                         <div
                                             className={classNames(
@@ -798,10 +799,9 @@ class MenuBar extends React.Component {
                                                 styles.mystuffButton
                                             )}
                                         >
-                                            <img
-                                                className={styles.mystuffIcon}
-                                                src={mystuffIcon}
-                                            />
+                                            <span>
+                                                {sessionStorage.getItem('analMode')=="T" ? "Back" : 'Share!'}
+                                            </span>
                                         </div>
                                     </MenuBarItemTooltip>
                                     <MenuBarItemTooltip
@@ -820,14 +820,12 @@ class MenuBar extends React.Component {
                                                 src={profileIcon}
                                             />
                                             <span>
-                                                {'scratch-cat'}
+                                                {sessionStorage.getItem('analMode')=="T" ? "Next!" : 'Save!'}
                                             </span>
-                                            <img
-                                                className={styles.dropdownCaretIcon}
-                                                src={dropdownCaret}
-                                            />
+                                            
                                         </div>
                                     </MenuBarItemTooltip>
+                                </>}
                                 </React.Fragment>
                             ) : []}
                         </React.Fragment>

@@ -32,9 +32,13 @@ import ConditionalApp from '../components/ConditionalApp.jsx';
 
 const id = nanoid();
 const spaceName = getSpaceNameFromUrl()
-const client = new Realtime.Promise({ authUrl: "https://p497lzzlxf.execute-api.us-east-2.amazonaws.com/Phase1/ably"});
-const spaces = new Spaces(client);
-const client2 = new Realtime({ authUrl: "https://p497lzzlxf.execute-api.us-east-2.amazonaws.com/Phase1/ably"});
+
+const queryString = window.location.search
+const urlParams = new URLSearchParams(queryString)
+const username = urlParams.get('name').toString()
+
+//const client = new Realtime({ authUrl: "https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/ablyToken?name=" + username});
+//const spaces = new Spaces(client2);
 
 /*
 const space = await spaces.get("test");
@@ -69,13 +73,13 @@ document.body.appendChild(appTarget);
 */
 
 ReactDOM.render(
-            <AblyProvider client={client2}>
-                <CursorOverlay spaces={spaces}/>
-            </AblyProvider>,
+        // <AblyProvider client={client}>
+            <CursorOverlay/>
+        // </AblyProvider>
+        ,
     appTarget
 );
-
-
+;
 /*
 if (supportedBrowser()) {
     // require needed here to avoid importing unsupported browser-crashing code

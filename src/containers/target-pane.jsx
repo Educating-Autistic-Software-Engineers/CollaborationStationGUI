@@ -131,11 +131,102 @@ class TargetPane extends React.Component {
     handleActivateBlocksTab () {
         this.props.onActivateTab(BLOCKS_TAB_INDEX);
     }
-    handleNewSprite (spriteJSONString) {
-        return this.props.vm.addSprite(spriteJSONString)
+    getRandomHexString(length) {
+        const chars = '0123456789abcdef';
+        let result = '';
+        for (let i = 0; i < length; i++) {
+          const randomIndex = Math.floor(Math.random() * chars.length);
+          result += chars[randomIndex];
+        }
+        return result;
+    }
+    decodeSvg(data) {
+        let svgString = '';
+    
+        for (let i = 0; i < Object.keys(data).length; i++) {
+            svgString += String.fromCharCode(data[i]);
+        }
+
+        return svgString;
+    }
+    decodePng(data) {
+
+        // Convert data object to Uint8Array
+        const byteNumbers = Object.values(data);
+        const byteArray = new Uint8Array(byteNumbers);
+
+        // Convert byteArray to a binary string
+        let binaryString = '';
+        for (let i = 0; i < byteArray.length; i += 0x8000) {
+            binaryString += String.fromCharCode.apply(null, byteArray.subarray(i, i + 0x8000));
+        }
+
+        // Convert binary string to base64
+        return btoa(binaryString);
+
+    }
+    async handleNewSprite (spriteJSONString) {
+        const data = JSON.parse(spriteJSONString);
+        const spriteJSON = {
+            blocks: {},
+            costumes: [],
+            sounds: [],
+            tags: [],
+            variables: {},
+            isStage: false,
+            name: data.name,
+            x: 0,
+            y: 0,
+        }
+        for (const costume of data.costumes) {
+            
+            const md5 = costume.md5
+            const assetId = md5.split('.')[0]
+            const jsonCostume = {
+                assetId: assetId,
+                bitmapResolution: 1,
+                dataFormat: costume.dataFormat,
+                md5ext: md5,
+                name: costume.name,
+                rotationCenterX: 0,
+                rotationCenterY: 0,
+            }
+
+            console.log(costume.dataFormat)
+            var fileContent
+            var contentType
+            
+            if (costume.dataFormat === 'svg') {
+                fileContent = this.decodeSvg(costume.asset.data);
+                contentType = 'image/svg+xml';
+            } else {
+                jsonCostume.bitmapResolution = 2;
+                fileContent = this.decodePng(costume.asset.data);
+                contentType = 'image/png';
+            }
+
+            const resp = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=" + md5 + "&cd=attachment", {
+                method: 'POST',
+                headers: {
+                    'Accept': '*/*',
+                    'Connection': 'keep-alive',
+                    'Content-Type': contentType,
+                    'Content-Disposition': 'attachment',
+                },
+                body: fileContent,
+            });
+            console.log(resp)
+
+            spriteJSON.costumes.push(jsonCostume)
+
+        }
+        console.log(spriteJSON)
+        return this.props.vm.addSprite(JSON.stringify(spriteJSON))
             .then(this.handleActivateBlocksTab);
     }
     handleFileUploadClick () {
+        // console.log(this.fileInput)
+        // return
         this.fileInput.click();
     }
     handleSpriteUpload (e) {

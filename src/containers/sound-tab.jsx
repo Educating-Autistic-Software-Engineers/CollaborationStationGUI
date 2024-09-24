@@ -128,14 +128,56 @@ class SoundTab extends React.Component {
         this.fileInput.click();
     }
 
+    decodeWav(data) {
+
+            // Directly get values from data and create a Uint8Array
+        const byteArray = new Uint8Array(Object.values(data));
+        
+        // Convert byteArray to Base64
+        let binaryString = '';
+        const len = byteArray.byteLength;
+        for (let i = 0; i < len; i++) {
+            binaryString += String.fromCharCode(byteArray[i]);
+        }
+        const base64String = btoa(binaryString);
+
+        return base64String;
+
+    }
+
     handleSoundUpload (e) {
         const storage = this.props.vm.runtime.storage;
         const targetId = this.props.vm.editingTarget.id;
         this.props.onShowImporting();
         handleFileUpload(e.target, (buffer, fileType, fileName, fileIndex, fileCount) => {
-            soundUpload(buffer, fileType, storage, newSound => {
+            soundUpload(buffer, fileType, storage, async (newSound) => {
                 newSound.name = fileName;
-                this.props.vm.addSound(newSound, targetId).then(() => {
+
+                const data = this.decodeWav(newSound.asset.data);
+
+                console.log(data)
+
+                const resp = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=" + newSound.md5 + "&cd=attachment", {
+                    method: 'POST',
+                    headers: {
+                        'Accept': '*/*',
+                        'Connection': 'keep-alive',
+                        'Content-Type': 'application/json',
+                        'Content-Disposition': 'attachment',
+                    },
+                    body: JSON.stringify({ file: data }),
+                });
+                console.log(resp)
+
+                const vmSound = {
+                    format: newSound.format,
+                    md5: newSound.md5,
+                    rate: newSound.rate,
+                    sampleCount: newSound.sampleCount,
+                    name: newSound.name
+                }
+
+                this.props.vm.addSound(vmSound, targetId).then(() => {
                     this.handleNewSound();
                     if (fileIndex === fileCount - 1) {
                         this.props.onCloseImporting();
@@ -225,7 +267,8 @@ class SoundTab extends React.Component {
                     title: intl.formatMessage(messages.addSound),
                     img: addSoundFromLibraryIcon,
                     onClick: onNewSoundFromLibraryClick
-                }, {
+                }, 
+                {
                     title: intl.formatMessage(messages.fileUploadSound),
                     img: fileUploadIcon,
                     onClick: this.handleFileUploadClick,
@@ -233,15 +276,18 @@ class SoundTab extends React.Component {
                     fileChange: this.handleSoundUpload,
                     fileInput: this.setFileInput,
                     fileMultiple: true
-                }, {
+                }, 
+                {
                     title: intl.formatMessage(messages.surpriseSound),
                     img: surpriseIcon,
                     onClick: this.handleSurpriseSound
-                }, {
-                    title: intl.formatMessage(messages.recordSound),
-                    img: addSoundFromRecordingIcon,
-                    onClick: onNewSoundFromRecordingClick
-                }, {
+                }, 
+                // {
+                //     title: intl.formatMessage(messages.recordSound),
+                //     img: addSoundFromRecordingIcon,
+                //     onClick: onNewSoundFromRecordingClick
+                // },
+                 {
                     title: intl.formatMessage(messages.addSound),
                     img: searchIcon,
                     onClick: onNewSoundFromLibraryClick

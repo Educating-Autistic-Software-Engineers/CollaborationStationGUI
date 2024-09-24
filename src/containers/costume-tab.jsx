@@ -170,10 +170,61 @@ class CostumeTab extends React.Component {
         const blob = new Blob([item.asset.data], {type: item.asset.assetType.contentType});
         downloadBlob(`${item.name}.${item.asset.dataFormat}`, blob);
     }
+    decodeSvg(data) {
+        let svgString = '';
+    
+        for (let i = 0; i < Object.keys(data).length; i++) {
+            svgString += String.fromCharCode(data[i]);
+        }
+
+        return svgString;
+    }
+    decodePng(data) {
+
+        const byteNumbers = Object.values(data);
+        const byteArray = new Uint8Array(byteNumbers);
+
+        // Convert byteArray to a binary string
+        let binaryString = '';
+        for (let i = 0; i < byteArray.length; i += 0x8000) {
+            binaryString += String.fromCharCode.apply(null, byteArray.subarray(i, i + 0x8000));
+        }
+
+        // Convert binary string to base64
+        return btoa(binaryString);
+
+    }
     handleNewCostume (costume, fromCostumeLibrary, targetId) {
         const costumes = Array.isArray(costume) ? costume : [costume];
 
-        return Promise.all(costumes.map(c => {
+        return Promise.all(costumes.map( async (c) => {
+
+            // var fileContent
+            // var contentType
+            
+            // if (c.dataFormat === 'svg') {
+            //     fileContent = this.decodeSvg(c.asset.data);
+            //     contentType = 'image/svg+xml';
+            // } else {
+            //     jsonCostume.bitmapResolution = 2;
+            //     fileContent = this.decodePng(c.asset.data);
+            //     contentType = 'image/png';
+            // }
+
+            // const resp = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=" + md5 + "&cd=attachment", {
+            //     method: 'POST',
+            //     headers: {
+            //         'Accept': '*/*',
+            //         'Connection': 'keep-alive',
+            //         'Content-Type': contentType,
+            //         'Content-Disposition': 'attachment',
+            //     },
+            //     body: fileContent,
+            // });
+            // console.log(resp)
+
+            console.log("BOOMSHAKA")
+
             if (fromCostumeLibrary) {
                 return this.props.vm.addCostumeFromLibrary(c.md5, c);
             }
@@ -309,21 +360,21 @@ class CostumeTab extends React.Component {
                         fileInput: this.setFileInput,
                         fileMultiple: true
                     },
-                    {
-                        title: intl.formatMessage(messages.addSurpriseCostumeMsg),
-                        img: surpriseIcon,
-                        onClick: addSurpriseFunc
-                    },
+                    // {
+                    //     title: intl.formatMessage(messages.addSurpriseCostumeMsg),
+                    //     img: surpriseIcon,
+                    //     onClick: addSurpriseFunc
+                    // },
                     {
                         title: intl.formatMessage(messages.addBlankCostumeMsg),
                         img: paintIcon,
                         onClick: this.handleNewBlankCostume
                     },
-                    {
-                        title: intl.formatMessage(addLibraryMessage),
-                        img: searchIcon,
-                        onClick: addLibraryFunc
-                    }
+                    // {
+                    //     title: intl.formatMessage(addLibraryMessage),
+                    //     img: searchIcon,
+                    //     onClick: addLibraryFunc
+                    // }
                 ]}
                 dragType={DragConstants.COSTUME}
                 isRtl={isRtl}

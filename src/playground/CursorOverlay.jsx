@@ -1,5 +1,5 @@
 // LiveCursors.jsx
-import { useMemo, useRef, useEffect } from "react";
+import { useMemo, useRef, useEffect, useState } from "react";
 import { useMembers, useSpace } from "@ably/spaces/react";
 import { mockNames } from "../utils/mockNames.js";
 import { colours } from "../utils/helpers.js";
@@ -12,9 +12,10 @@ import 'core-js/fn/array/includes';
 //import 'core-js/fn/promise/finally';
 import 'intl';
 import ConditionalApp from '../components/ConditionalApp.jsx'
+import { ablySpace } from "../utils/AblyHandlers.jsx";
 const mockName = () => mockNames[Math.floor(Math.random() * mockNames.length)];
 
-const CursorOverlay = ({ spaces }) => {
+const CursorOverlay = () => {
     const name = useMemo(mockName, []);
     const userColors = useMemo(() => colours[Math.floor(Math.random() * colours.length)], []);
     const { space } = useSpace();
@@ -50,11 +51,44 @@ const CursorOverlay = ({ spaces }) => {
     const urlParams = new URLSearchParams(queryString)
     let uname = urlParams.get('name')
 
+    const [websocket, setWebSocket] = useState(null);
+
+    useEffect(() => {
+        console.log(`wss://nwab9zf1ik.execute-api.us-east-2.amazonaws.com/production/?room=${ablySpace}`)
+        const ws = new WebSocket(`wss://nwab9zf1ik.execute-api.us-east-2.amazonaws.com/production/?room=${ablySpace}`);
+        ws.onopen = () => {
+            console.log('WebSocket Client Connected', ws);
+            setWebSocket(ws);
+        };
+        ws.onclose = () => {
+            console.log('WebSocket Client Disconnected');
+            setWebSocket(null);
+        };
+
+        const keepAlive = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 30000); // send a ping message every 30 seconds
+
+        return () => {
+            clearInterval(keepAlive);
+            if (ws) {
+                ws.close();
+            }
+        };
+
+    }, []);
+
+    if (!websocket) {
+        return <div>Loading...</div>
+    }
+
     return (
         <div id="live-cursors" ref={liveCursors} className={styles.app}>
             <ConditionalApp/>
-            <YourCursor self={3} name={uname} className={styles.overlay} />
-            <MemberCursors />
+            <YourCursor self={self} name={uname} websocket={websocket}/>
+            <MemberCursors websocket={websocket}/>
         </div>
     );
     /*
