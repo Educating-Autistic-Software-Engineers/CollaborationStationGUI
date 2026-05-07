@@ -268,7 +268,6 @@ const ProjectSaverHOC = function (WrappedComponent) {
         storeProjectThumbnail (projectId) {
             try {
                 this.getProjectThumbnail(dataURI => {
-                    console.log(dataURI);
                     this.props.onUpdateProjectThumbnail(projectId, dataURItoBlob(dataURI));
                 });
             } catch (e) {

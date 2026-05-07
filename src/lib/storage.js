@@ -85,7 +85,6 @@ class Storage extends ScratchStorage {
         this.assetHost = assetHost;
     }
     getAssetGetConfig (asset) {
-        console.log(`${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`)
         // console.log(`${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`)
         // if (asset.dataFormat == "wav")
         //     return `${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`;
@@ -95,7 +94,6 @@ class Storage extends ScratchStorage {
         // if (asset.dataFormat === "svg")
         //     return "https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=390845c11df0924f3b627bafeb3f814e.svg"
         // console.log(`https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=${asset.assetId}.${asset.dataFormat}`)
-        console.log(`https://d3pl0tx5n82s71.cloudfront.net/${asset.assetId}.${asset.dataFormat}`)
         return `https://d3pl0tx5n82s71.cloudfront.net/${asset.assetId}.${asset.dataFormat}`
         // return `https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=${asset.assetId}.${asset.dataFormat}`
     }

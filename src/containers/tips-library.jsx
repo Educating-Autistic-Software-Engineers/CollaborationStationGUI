@@ -37,6 +37,7 @@ class TipsLibrary extends React.PureComponent {
         ]);
     }
     handleItemSelect (item) {
+        console.log('handleItemSelect', item);
         analytics.event({
             category: 'library',
             action: 'Select How-to',

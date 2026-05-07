@@ -231,7 +231,6 @@ class LibraryComponent extends React.Component {
     };
     async uploadFiles() {
         let costumes = []
-        console.log(this.props.data)
         for (const costume of this.props.data) {
             try {
                 await this.fetchAndUploadWAV(

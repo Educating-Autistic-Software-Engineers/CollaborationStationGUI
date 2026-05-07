@@ -800,7 +800,7 @@ class MenuBar extends React.Component {
                                             )}
                                         >
                                             <span>
-                                                {sessionStorage.getItem('analMode')=="T" ? "Back" : 'Share!'}
+                                                {sessionStorage.getItem('analMode')=="T" ? "Back" : ''}
                                             </span>
                                         </div>
                                     </MenuBarItemTooltip>

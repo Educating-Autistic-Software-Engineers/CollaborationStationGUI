@@ -14,6 +14,7 @@ import ExtensionLibrary from './extension-library.jsx';
 import extensionData from '../lib/libraries/extensions/index.jsx';
 import CustomProcedures from './custom-procedures.jsx';
 import errorBoundaryHOC from '../lib/error-boundary-hoc.jsx';
+import dataURItoBlob from '../lib/data-uri-to-blob';
 import {BLOCKS_DEFAULT_SCALE, STAGE_DISPLAY_SIZES} from '../lib/layout-constants';
 import DropAreaHOC from '../lib/drop-area-hoc.jsx';
 import DragConstants from '../lib/drag-constants';
@@ -75,7 +76,8 @@ const uname = name
 const s3Client = new AWS.S3();
 const nid = nanoid();
 const ably = ablyInstance;
-var channel = ably.channels.get(ablySpace);
+const innerChannelName = ablySpace && ablySpace.endsWith('_inner') ? ablySpace : `${ablySpace}_inner`;
+var channel = ably.channels.get(innerChannelName);
 let hasInited = false;
 let flag1 = false;
 let flag2 = false;
@@ -114,6 +116,9 @@ class Blocks extends React.Component {
             'attachVM',
             'detachVM',
             'getToolboxXML',
+            'handleParentMessage',
+            'handleRemoteHighlightMessage',
+            'resolveBlockIdForHighlight',
             'handleCategorySelected',
             'handleConnectionModalStart',
             'handleDrop',
@@ -134,6 +139,7 @@ class Blocks extends React.Component {
             'onVisualReport',
             'onWorkspaceUpdate',
             'onWorkspaceMetricsChange',
+            'highlightBlockById',
             'setBlocks',
             'setLocale'
         ]);
@@ -149,6 +155,8 @@ class Blocks extends React.Component {
         this.myRef = React.createRef()
         this.onTargetsUpdate = debounce(this.onTargetsUpdate, 100);
         this.toolboxUpdateQueue = [];
+        this.highlightTimeout = null;
+        this.noteTimeouts = new Map();
 
         setInterval(() => {
             // if (this.queue.length == 1 && this.queue[0].type == "move") {
@@ -238,6 +246,10 @@ class Blocks extends React.Component {
 
         this.updateDimensions();
         window.addEventListener('resize', this.updateDimensions);
+        window.addEventListener('message', this.handleParentMessage);
+        
+        window.highlightScratchBlock = (blockId, options = {}) =>
+            this.highlightBlockById(blockId, options);
         
     }
     shouldComponentUpdate (nextProps, nextState) {
@@ -295,10 +307,15 @@ class Blocks extends React.Component {
         this.detachVM();
         this.workspace.dispose();
         clearTimeout(this.toolboxUpdateTimeout);
+        clearTimeout(this.highlightTimeout);
+        this.noteTimeouts.forEach(timeoutId => clearTimeout(timeoutId));
+        this.noteTimeouts.clear();
 
         // Clear the flyout blocks so that they can be recreated on mount.
         this.props.vm.clearFlyoutBlocks();
         window.removeEventListener('resize', this.updateDimensions);
+        window.removeEventListener('message', this.handleParentMessage);
+        delete window.highlightScratchBlock;
     }
     requestToolboxUpdate () {
         clearTimeout(this.toolboxUpdateTimeout);
@@ -470,6 +487,7 @@ class Blocks extends React.Component {
             console.log("connected to Ably!!");
 
             await channel.subscribe('event', (message) => this.recieveInformation(message));
+            await channel.subscribe('highlightBlock', this.handleRemoteHighlightMessage);
             //await channel.subscribe('onSelect', (message) => this.spriteOnSelect(message));
             await channel.subscribe('imageUpdated', (message) => this.imageUpdated(message))
             await channel.subscribe('newJoin', this.newUserJoined.bind(this))
@@ -519,6 +537,146 @@ class Blocks extends React.Component {
             await channel.presence.enter() 
 
         }
+    }
+
+    handleParentMessage (event) {
+        if (!event || !event.data) return;
+
+        const data = event.data;
+        if (typeof data !== 'object') return;
+        if (data.type !== 'highlightBlock' && data.type !== 'highlightAnyBlock') return;
+
+        const blockId = data.blockId || this.resolveBlockIdForHighlight(data);
+        if (!blockId) return;
+        this.highlightBlockById(blockId, data);
+    }
+
+    handleRemoteHighlightMessage (message) {
+        if (!message || !message.data) return;
+
+        let payload = message.data;
+        if (typeof payload === 'string') {
+            try {
+                payload = JSON.parse(payload);
+            } catch {
+                return;
+            }
+        }
+
+        if (!payload || typeof payload !== 'object') return;
+        if (!payload.blockId) {
+            payload.blockId = this.resolveBlockIdForHighlight(payload);
+        }
+        if (!payload.blockId) return;
+
+        this.highlightBlockById(payload.blockId, payload);
+    }
+
+    resolveBlockIdForHighlight (options = {}) {
+        if (!this.workspace || typeof this.workspace.getAllBlocks !== 'function') return null;
+
+        const allBlocks = this.workspace.getAllBlocks(false);
+        if (!Array.isArray(allBlocks) || allBlocks.length === 0) return null;
+
+        const opcode = options.opcode || options.blockType;
+        const containsText =
+            typeof options.containsText === 'string' && options.containsText.trim()
+                ? options.containsText.toLowerCase()
+                : null;
+
+        let candidates = allBlocks;
+
+        if (opcode) {
+            candidates = candidates.filter(block => block && block.type === opcode);
+        }
+
+        if (containsText) {
+            candidates = candidates.filter(block => {
+                if (!block) return false;
+
+                if (typeof block.toString === 'function' &&
+                    String(block.toString()).toLowerCase().includes(containsText)) {
+                    return true;
+                }
+
+                if (!Array.isArray(block.inputList)) return false;
+                return block.inputList.some(input => Array.isArray(input.fieldRow) &&
+                    input.fieldRow.some(field => {
+                        let fieldText = '';
+                        if (field && typeof field.getText === 'function') {
+                            fieldText = field.getText();
+                        } else if (field && typeof field.getValue === 'function') {
+                            fieldText = field.getValue();
+                        }
+                        return String(fieldText).toLowerCase().includes(containsText);
+                    }));
+            });
+        }
+
+        if (candidates.length === 0) return null;
+
+        const topLevelBlock = candidates.find(block =>
+            block && typeof block.getSurroundParent === 'function' && !block.getSurroundParent());
+        const resolved = topLevelBlock || candidates[0];
+        return resolved && resolved.id ? resolved.id : null;
+    }
+
+    highlightBlockById (blockId, options = {}) {
+        if (!this.workspace || !blockId) return false;
+
+        const durationMs = Number(options.durationMs) > 0 ? Number(options.durationMs) : 1500;
+        const targetName = options.targetName || options.spriteName;
+
+        if (targetName && this.props.vm && this.props.vm.editingTarget && this.props.vm.editingTarget.sprite &&
+            this.props.vm.editingTarget.sprite.name !== targetName) {
+            const target = this.getTargetByName(targetName);
+            if (target) {
+                this.props.vm.setEditingTarget(target.id);
+                setTimeout(() => this.highlightBlockById(blockId, {
+                    ...options,
+                    targetName: null,
+                    spriteName: null
+                }), 60);
+                return true;
+            }
+        }
+
+        const block = this.workspace.getBlockById(blockId);
+        if (!block) {
+            return false;
+        }
+
+        if (typeof options.noteText === 'string' && options.noteText.trim()) {
+            const blockPosition = typeof block.getRelativeToSurfaceXY === 'function' ? block.getRelativeToSurfaceXY() : {x: 0, y: 0};
+            const blockWidth = typeof block.getWidth === 'function' ? block.getWidth() : 0;
+            const noteX = blockPosition.x + blockWidth + 32;
+            const noteY = blockPosition.y;
+
+            if (typeof block.setCommentText === 'function') {
+                block.setCommentText(options.noteText, null, noteX, noteY, false);
+                if (block.comment && typeof block.comment.setVisible === 'function') {
+                    block.comment.setVisible(true);
+                }
+            }
+        }
+
+        // Match Scratch runtime style glow: block glow plus script glow, without selecting or recentering.
+        const rootBlock = typeof block.getRootBlock === 'function' ? block.getRootBlock() : null;
+        if (rootBlock && rootBlock.id) {
+            this.workspace.glowStack(rootBlock.id, true);
+        }
+        this.workspace.glowBlock(blockId, true);
+
+        clearTimeout(this.highlightTimeout);
+        this.highlightTimeout = setTimeout(() => {
+            if (!this.workspace) return;
+            if (rootBlock && rootBlock.id) {
+                this.workspace.glowStack(rootBlock.id, false);
+            }
+            this.workspace.glowBlock(blockId, false);
+        }, durationMs);
+
+        return true;
     }
 
     async spriteOnSelect(msg) {
@@ -681,14 +839,12 @@ class Blocks extends React.Component {
                     chunks.push(value);
                 }
                 const concatenated = new Uint8Array(chunks.reduce((acc, chunk) => acc.concat(Array.from(chunk)), []));
-                console.log("PARSING", concatenated)
                 const jsonString = decoder.decode(concatenated);
-                console.log(jsonString)
                 if (jsonString == "{\"message\":\"No versions found\"}") {
                     console.log("starting new project...")
                 } else {
                     const jsonParsed = JSON.parse(jsonString);
-                    console.log("JSPARESE", jsonParsed)
+                    console.log("JSPARESE")
                     this.keyMarker = jsonParsed.keyMarker;
                     this.versionIdMarker = jsonParsed.versionIdMarker;
 
@@ -780,8 +936,23 @@ class Blocks extends React.Component {
             body: ablySpace+"~|@^|@|~"+s
         });
 
-        this.props.vm.renderer.requestSnapshot(dataURI => {
-            console.log("SAVEDTO", dataURI)
+        this.props.vm.renderer.requestSnapshot(async (dataURI) => {
+            dataURI = dataURI.replace(/^data:image\/\w+;base64,/, '');
+            const imagename = ablySpace + ".png"
+            console.log("SAVEDTO", dataURI);
+            console.log(imagename)
+            const resp = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=" + imagename + "&cd=attachment", {
+                method: 'POST',
+                headers: {
+                    'Accept': '*/*',
+                    'Connection': 'keep-alive',
+                    'Content-Type': 'image/png',
+                    'Content-Disposition': 'attachment',
+                },
+                body: dataURI,
+            });
+            console.log(resp)
+            
         });
 
     }
@@ -809,9 +980,9 @@ class Blocks extends React.Component {
         }).then(resp => console.log('logged', resp));
     }
 
+
     async sendInformation(eve) {
 
-        console.log(this.props.vm);
 
         if (this.isViewOnly) {
             console.log("view only mode; ignoring event")
@@ -1301,6 +1472,7 @@ class Blocks extends React.Component {
                 type: "custom:deleteSprite",
                 spriteName: name,
             });
+            
             
             channel.publish('deleteSprite', JSON.stringify(name));
         }
@@ -1945,11 +2117,8 @@ class Blocks extends React.Component {
             ogUpdateScroll(x,y)
         }.bind(this)
 
-        console.log("STORAGE", this.props.vm.runtime.storage)
-        console.log("ASSETTOOL", this.props.vm.runtime.storage.webHelper.assetTool)
         const ogRuntimeImageLoad = this.props.vm.runtime.storage.load.bind(this.props.vm.runtime.storage);
         this.props.vm.runtime.storage.load = function(a,b,c) {
-            console.log("LOADING FROM VM", a,b,c);
             return ogRuntimeImageLoad(a,b,c);
         }
 
@@ -1976,7 +2145,6 @@ class Blocks extends React.Component {
             return fetch(url, Object.assign({method: 'GET', "Connection": "keep-alive", "Accept": "*/*"}, options))
                 .then(result => {
                     // result.arrayBuffer().then(b => {const r = new Uint8Array(b);  console.log("MAGIK",url,b,r)})
-                    console.log("RES", result)
                     if (result.ok) return result.arrayBuffer().then(b => new Uint8Array(b));
                     if (result.status === 404) return null;
                     return Promise.reject(result.status); // TODO: we should throw a proper error
@@ -2200,7 +2368,6 @@ class Blocks extends React.Component {
         // Remove and reattach the workspace listener (but allow flyout events)
         this.workspace.removeChangeListener(this.props.vm.blockListener);
         const dom = this.ScratchBlocks.Xml.textToDom(data.xml);
-        console.log(dom)
         try {
             this.ScratchBlocks.Xml.clearWorkspaceAndLoadFromXml(dom, this.workspace);
         } catch (error) {
@@ -2323,7 +2490,6 @@ class Blocks extends React.Component {
     // handlePrompt(msg) {
     //     const callback = this.ScratchBlocks.Variables.createVariable
     //     const {message, defaultValue, optTitle, optVarType} = JSON.parse(msg.data);
-        console.log(callback)
         const p = {prompt: {callback, message, defaultValue}};
         p.prompt.title = optTitle ? optTitle :
             this.ScratchBlocks.Msg.VARIABLE_MODAL_TITLE;
