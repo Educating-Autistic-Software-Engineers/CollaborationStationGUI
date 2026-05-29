@@ -2246,6 +2246,28 @@ class Blocks extends React.Component {
         if (JSON.parse(msg.data).uid == nid) {
             return;
         }
+
+        const presenceSet = await channel.presence.get();
+        const syncOwner = presenceSet
+            .slice()
+            .sort((first, second) => {
+                const firstClientId = first.clientId || '';
+                const secondClientId = second.clientId || '';
+
+                if (firstClientId < secondClientId) return -1;
+                if (firstClientId > secondClientId) return 1;
+
+                const firstConnectionId = first.connectionId || '';
+                const secondConnectionId = second.connectionId || '';
+                if (firstConnectionId < secondConnectionId) return -1;
+                if (firstConnectionId > secondConnectionId) return 1;
+                return 0;
+            })[0];
+
+        if (!syncOwner || syncOwner.clientId !== name) {
+            return;
+        }
+
         await this.save();
         console.log("JOINED!!")
         await channel.publish('goodForLoad', JSON.stringify({uid: nid}) );
