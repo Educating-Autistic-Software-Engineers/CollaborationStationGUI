@@ -26,7 +26,8 @@ try {
     }
 }
 
-export const ablySpace = space
+export const inSpace = space
+export const ablySpace = space && space.endsWith('_inner') ? space : `${space}_inner`;
 export const name = urlParams.get('name').toString()
 export const cursorColor = urlParams.get('color').toString()
 

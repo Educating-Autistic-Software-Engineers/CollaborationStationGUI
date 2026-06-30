@@ -9,7 +9,9 @@ import {connect} from 'react-redux';
 
 import { ablyInstance, ablySpace, name } from '../utils/AblyHandlers';
 
-const channel = ablyInstance.channels.get(ablySpace);
+const ably = ablyInstance;
+const innerChannelName = ablySpace && ablySpace.endsWith('_inner') ? ablySpace : `${ablySpace}_inner`;
+var channel = ably.channels.get(innerChannelName);
 
 class PaintEditorWrapper extends React.Component {
     constructor (props) {
@@ -44,24 +46,29 @@ class PaintEditorWrapper extends React.Component {
     }
     async handleUpdateImage (isVector, image, rotationCenterX, rotationCenterY) {
         const target = this.props.vm.editingTarget
+        let assetId;
         
-        if (isVector) {
-            this.props.vm.updateSvg(
-                this.props.selectedCostumeIndex,
-                image,
-                rotationCenterX,
-                rotationCenterY,
-                target.sprite.name
-            );
-        } else {
-            this.props.vm.updateBitmap(
-                this.props.selectedCostumeIndex,
-                image,
-                rotationCenterX,
-                rotationCenterY,
-                2 /* bitmapResolution */,
-                target.sprite.name
-            );
+        try {
+            if (isVector) {
+                assetId = await this.props.vm.updateSvg(
+                    this.props.selectedCostumeIndex,
+                    image,
+                    rotationCenterX,
+                    rotationCenterY,
+                    target.sprite.name
+                );
+            } else {
+                assetId = await this.props.vm.updateBitmap(
+                    this.props.selectedCostumeIndex,
+                    image,
+                    rotationCenterX,
+                    rotationCenterY,
+                    2 /* bitmapResolution */,
+                    target.sprite.name
+                );
+            }
+        } catch (e) {
+            console.error('Costume update failed before upload', e);
         }
 
         if (!isVector) {
@@ -69,7 +76,11 @@ class PaintEditorWrapper extends React.Component {
             image = JSON.stringify(b64image)
         }
         
-        const assetId = target.sprite['costumes'][this.props.selectedCostumeIndex].assetId
+        assetId = assetId || target.sprite['costumes'][this.props.selectedCostumeIndex].assetId
+        if (!assetId) {
+            console.error('No assetId available for costume upload; skipping publish');
+            return;
+        }
         const ext = isVector ? 'svg' : 'png'
 
         console.log('pre',assetId)

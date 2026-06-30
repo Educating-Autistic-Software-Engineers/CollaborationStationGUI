@@ -34,7 +34,7 @@ import {Realtime} from "ably";
 import Ably from 'ably';
 import { AblyProvider, useChannel, usePresence } from 'ably/react';
 import {nanoid} from 'nanoid';
-import {ablySpace, ablyInstance, name} from "../utils/AblyHandlers.jsx";
+import {inSpace, ablySpace, ablyInstance, name} from "../utils/AblyHandlers.jsx";
 import s3 from '../utils/S3DataFetcher.jsx';
 import AWS from 'aws-sdk';
 //import s3Client from "@aws-sdk/client-s3";
@@ -77,7 +77,7 @@ const s3Client = new AWS.S3();
 const nid = nanoid();
 const ably = ablyInstance;
 const innerChannelName = ablySpace && ablySpace.endsWith('_inner') ? ablySpace : `${ablySpace}_inner`;
-var channel = ably.channels.get(innerChannelName);
+var channel = ably.channels.get(ablySpace);
 let hasInited = false;
 let flag1 = false;
 let flag2 = false;
@@ -741,6 +741,8 @@ class Blocks extends React.Component {
     async imageUpdated(msg) {
         const data = JSON.parse(msg.data);
 
+        console.log(data);
+
         if (data.name == uname) {
             return;
         }
@@ -811,7 +813,7 @@ class Blocks extends React.Component {
             this.stopEmission = true;
 
             const datas = {
-                key: ablySpace,
+                key: inSpace,
                 vid: this.vid,
                 keyMarker: this.keyMarker,
                 versionIdMarker: this.versionIdMarker,
@@ -868,20 +870,16 @@ class Blocks extends React.Component {
                         }
 
                         const costumes = target.costumes;
-                        //make a copy of costumes
-                        const costumes2 = [...costumes];
-                        for (let costume of costumes2) {
-                            // check if the costume object has the costume variable:
-                            if (!costume.hasOwnProperty("md5ext")) {
-                                costume.md5ext = costume.assetId + "." + costume.dataFormat;
-                            }
-
-                            // check if costume.md5ext contains the word "undefined"
-                            if (costume.md5ext.includes("undefined")) {
-                                // remove the costume from the array
-                                const idx = costumes.indexOf(costume);
-                                costumes.splice(idx, 1);
-                                console.log("removed", costume)
+                        for (let costume of costumes) {
+                            // Normalize md5ext for older/incomplete saves instead of deleting costumes.
+                            if (!costume.hasOwnProperty("md5ext") || !costume.md5ext || costume.md5ext.includes("undefined")) {
+                                if (costume.assetId && costume.dataFormat) {
+                                    costume.md5ext = `${costume.assetId}.${costume.dataFormat}`;
+                                } else if (costume.md5) {
+                                    costume.md5ext = costume.md5.includes('.') ?
+                                        costume.md5 :
+                                        `${costume.md5}.${costume.dataFormat || 'svg'}`;
+                                }
                             }
                         }
                     }
@@ -933,12 +931,12 @@ class Blocks extends React.Component {
         
         await fetch('https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/s3-storage', {
             method: 'POST',
-            body: ablySpace+"~|@^|@|~"+s
+            body: inSpace+"~|@^|@|~"+s
         });
 
         this.props.vm.renderer.requestSnapshot(async (dataURI) => {
             dataURI = dataURI.replace(/^data:image\/\w+;base64,/, '');
-            const imagename = ablySpace + ".png"
+            const imagename = inSpace + ".png"
             console.log("SAVEDTO", dataURI);
             console.log(imagename)
             const resp = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/images?fileName=" + imagename + "&cd=attachment", {
@@ -1946,10 +1944,13 @@ class Blocks extends React.Component {
         
         this.props.vm.updateBitmap = function(costumeIndex, bitmap, rotationCenterX, rotationCenterY, bitmapResolution, targetName = "") {
             var target;
-            if (targetName == "")
-                target = this.editingTarget
-            else 
+            if (targetName == "") {
+                target = this.editingTarget;
+            } else if (targetName == "Stage") {
+                target = this.runtime.getTargetForStage();
+            } else {
                 target = this.runtime.getSpriteTargetByName(targetName);
+            }
             const costume = target.getCostumes()[costumeIndex];
             if (!(costume && this.runtime && this.runtime.renderer)) return;
             if (costume && costume.broken) delete costume.broken;
@@ -1977,28 +1978,43 @@ class Blocks extends React.Component {
             );
     
             // @todo there should be a better way to get from ImageData to a decodable storage format
-            canvas.toBlob(blob => {
-                const reader = new FileReader();
-                reader.addEventListener('loadend', () => {
-                    const storage = this.runtime.storage;
-                    costume.dataFormat = storage.DataFormat.PNG;
-                    costume.bitmapResolution = bitmapResolution;
-                    costume.size = [bitmapWidth, bitmapHeight];
-                    costume.asset = storage.createAsset(
-                        storage.AssetType.ImageBitmap,
-                        costume.dataFormat,
-                        Buffer.from(reader.result),
-                        null, // id
-                        true // generate md5
-                    );
-                    costume.assetId = costume.asset.assetId;
-                    costume.md5 = `${costume.assetId}.${costume.dataFormat}`;
-                    this.emitTargetsUpdate();
-                });
-                // Bitmaps with a zero width or height return null for their blob
-                if (blob){
+            return new Promise(resolve => {
+                canvas.toBlob(blob => {
+                    // Bitmaps with a zero width or height return null for their blob.
+                    // Keep the existing asset metadata in this edge case.
+                    if (!blob) {
+                        this.emitTargetsUpdate();
+                        resolve(costume.assetId);
+                        return;
+                    }
+
+                    const reader = new FileReader();
+                    reader.addEventListener('loadend', () => {
+                        try {
+                            const storage = this.runtime.storage;
+                            costume.dataFormat = storage.DataFormat.PNG;
+                            costume.bitmapResolution = bitmapResolution;
+                            costume.size = [bitmapWidth, bitmapHeight];
+                            costume.asset = storage.createAsset(
+                                storage.AssetType.ImageBitmap,
+                                costume.dataFormat,
+                                new Uint8Array(reader.result),
+                                null, // id
+                                true // generate md5
+                            );
+                            costume.assetId = costume.asset.assetId;
+                            costume.md5 = `${costume.assetId}.${costume.dataFormat}`;
+                            costume.md5ext = costume.md5;
+                            this.emitTargetsUpdate();
+                            resolve(costume.assetId);
+                        } catch (e) {
+                            console.error('updateBitmap asset creation failed', e);
+                            resolve(costume.assetId);
+                        }
+                    });
+                    reader.addEventListener('error', () => resolve(costume.assetId));
                     reader.readAsArrayBuffer(blob);
-                }
+                });
             });
         }.bind(this.props.vm);
 
@@ -2033,7 +2049,9 @@ class Blocks extends React.Component {
             );
             costume.assetId = costume.asset.assetId;
             costume.md5 = `${costume.assetId}.${costume.dataFormat}`;
+            costume.md5ext = costume.md5;
             this.emitTargetsUpdate();
+            return Promise.resolve(costume.assetId);
         }.bind(this.props.vm);
 
         // console.log(this.props.vm.runtime._primitives)
