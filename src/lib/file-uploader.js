@@ -109,6 +109,7 @@ const costumeUpload = function (fileData, fileType, storage, handleCostume, hand
         assetType = storage.AssetType.ImageVector;
         break;
     }
+    case 'image/jpg':
     case 'image/jpeg': {
         costumeFormat = storage.DataFormat.JPG;
         assetType = storage.AssetType.ImageBitmap;
@@ -218,6 +219,7 @@ const spriteUpload = function (fileData, fileType, spriteName, storage, handleSp
     case 'image/svg+xml':
     case 'image/png':
     case 'image/bmp':
+    case 'image/jpg':
     case 'image/jpeg':
     case 'image/gif': {
         // Make a sprite from an image by making it a costume first

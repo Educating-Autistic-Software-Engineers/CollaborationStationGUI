@@ -73,6 +73,12 @@ import {
 } from '../../reducers/menus';
 
 import collectMetadata from '../../lib/collect-metadata';
+import {
+    versionOffsetEnabled,
+    getVersionOffset,
+    setVersionOffset,
+    subscribeVersionOffset
+} from '../../utils/versionOffset.js';
 
 import styles from './menu-bar.css';
 
@@ -182,14 +188,34 @@ class MenuBar extends React.Component {
             'handleKeyPress',
             'handleRestoreOption',
             'getSaveToComputerHandler',
-            'restoreOptionMessage'
+            'restoreOptionMessage',
+            'handleClickOlderVersion',
+            'handleClickNewerVersion'
         ]);
+        this.state = {
+            versionOffset: getVersionOffset()
+        };
     }
     componentDidMount () {
         document.addEventListener('keydown', this.handleKeyPress);
+        // Blocks can clamp the offset when the history runs out, so mirror the shared
+        // value rather than tracking our own copy of it.
+        this.unsubscribeVersionOffset = subscribeVersionOffset(
+            versionOffset => this.setState({versionOffset})
+        );
     }
     componentWillUnmount () {
         document.removeEventListener('keydown', this.handleKeyPress);
+        if (this.unsubscribeVersionOffset) {
+            this.unsubscribeVersionOffset();
+            this.unsubscribeVersionOffset = null;
+        }
+    }
+    handleClickOlderVersion () {
+        setVersionOffset(getVersionOffset() + 1);
+    }
+    handleClickNewerVersion () {
+        setVersionOffset(getVersionOffset() - 1);
     }
     handleClickNew () {
         // if the project is dirty, and user owns the project, we will autosave.
@@ -614,6 +640,32 @@ class MenuBar extends React.Component {
                             </div>
                         )}
                     </div>
+                    {versionOffsetEnabled && (
+                        <div className={classNames(styles.menuBarItem, styles.versionOffset)}>
+                            <button
+                                aria-label="Go one version back"
+                                className={styles.versionOffsetButton}
+                                title="Go one version back"
+                                onClick={this.handleClickOlderVersion}
+                            >
+                                {'◀'}
+                            </button>
+                            <span className={styles.versionOffsetLabel}>
+                                {this.state.versionOffset === 0 ?
+                                    'Current' :
+                                    `${this.state.versionOffset} back`}
+                            </span>
+                            <button
+                                aria-label="Go one version forward"
+                                className={styles.versionOffsetButton}
+                                disabled={this.state.versionOffset === 0}
+                                title="Go one version forward"
+                                onClick={this.handleClickNewerVersion}
+                            >
+                                {'▶'}
+                            </button>
+                        </div>
+                    )}
                     {false ? (
                         <div className={classNames(styles.menuBarItem, styles.growable)}>
                             <MenuBarItemTooltip

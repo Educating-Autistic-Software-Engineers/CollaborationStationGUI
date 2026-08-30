@@ -83,6 +83,43 @@
     width: 2rem;
 }
 
+/* Version history stepper, only rendered when the versionOffset query arg is present */
+.version-offset {
+    gap: 0.25rem;
+    margin: 0 0.5rem;
+}
+
+.version-offset-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    border: none;
+    border-radius: 0.25rem;
+    background-color: $ui-black-transparent;
+    color: $ui-white;
+    font-size: 0.75rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.version-offset-button:hover:not(:disabled) {
+    background-color: $ui-white-transparent;
+}
+
+.version-offset-button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.version-offset-label {
+    min-width: 4rem;
+    text-align: center;
+    font-size: 0.75rem;
+}
+
 .file-group {
     display: flex;
     flex-direction: row;

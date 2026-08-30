@@ -35,6 +35,7 @@ import Ably from 'ably';
 import { AblyProvider, useChannel, usePresence } from 'ably/react';
 import {nanoid} from 'nanoid';
 import {inSpace, ablySpace, ablyInstance, name} from "../utils/AblyHandlers.jsx";
+import {getVersionOffset, setVersionOffset, subscribeVersionOffset} from "../utils/versionOffset.js";
 import s3 from '../utils/S3DataFetcher.jsx';
 import AWS from 'aws-sdk';
 //import s3Client from "@aws-sdk/client-s3";
@@ -81,6 +82,8 @@ var channel = ably.channels.get(ablySpace);
 let hasInited = false;
 let flag1 = false;
 let flag2 = false;
+
+const S3_STORAGE_URL = "https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/s3-storage";
 
 let stopEmission = false;
 
@@ -250,7 +253,10 @@ class Blocks extends React.Component {
         
         window.highlightScratchBlock = (blockId, options = {}) =>
             this.highlightBlockById(blockId, options);
-        
+
+        // The menu bar's version arrows change the offset; reload the project at it.
+        this.unsubscribeVersionOffset = subscribeVersionOffset(() => this.load());
+
     }
     shouldComponentUpdate (nextProps, nextState) {
         return (
@@ -315,6 +321,10 @@ class Blocks extends React.Component {
         this.props.vm.clearFlyoutBlocks();
         window.removeEventListener('resize', this.updateDimensions);
         window.removeEventListener('message', this.handleParentMessage);
+        if (this.unsubscribeVersionOffset) {
+            this.unsubscribeVersionOffset();
+            this.unsubscribeVersionOffset = null;
+        }
         delete window.highlightScratchBlock;
     }
     requestToolboxUpdate () {
@@ -452,27 +462,37 @@ class Blocks extends React.Component {
             this.hasLoadedInitially = false;
             this.queueWorkspaceUpdate = false
             this.pauseWorkspaceUpdate = false;
-            this.queueFurtherSends = false;
+            // stopEmission is a coarse "suppress all outgoing sync" flag used only
+            // around long-lived, self-contained local operations (full project load,
+            // reverting a losing local edit). It is always paired with try/finally at
+            // its call sites so it can never get stuck "on".
             this.stopEmission = false;
-            this.holdingBlock = false;
             this.errorLoading = false;
             this.keyMarker = null;
             this.versionIdMarker = null;
-            this.lastBlockId = "";
-            this.lastBlockType = "";
-            this.lastTempId = ""
             this.randomIndex = 0;
             this.cacheEventTime = 50 //ms
+            this.maxBatchWaitTime = 200 //ms -- hard ceiling so a batch can never wait forever
             this.vid = -1;
             hasInited = true;
 
-            this.timer = null;
+            this.rootVersions = new Map();
 
             // this.varCallbackFunc = function(a,b,c) {console.log(a,b,c, "callback var trigged early")};
 
-            this.messageQueue = []
-            this.backlog = [];
-            this.queue = [];
+            // --- Outgoing event batching (replaces the old dual queue/messageQueue/backlog system) ---
+            this.outgoingBatch = [];
+            this.flushTimer = null;
+            this.maxWaitTimer = null;
+
+            // --- Loop-prevention for replayed (remote / reverted) events; see runSuppressed() ---
+            this.suppressedGroups = new Set();
+            this.suppressCounter = 0;
+
+            // --- Serializes target swaps so concurrent remote batches for
+            // different sprites can't interleave; see withTargetContext() ---
+            this.targetContextChain = Promise.resolve();
+
             //this.blocks = [];
             this.idToAll = {};
             this.amountOfBlocks = 0;
@@ -538,6 +558,110 @@ class Blocks extends React.Component {
 
         }
     }
+
+    getRootBlockId (blockId) {
+        const block = this.workspace.getBlockById(blockId);
+        if (!block) return blockId;
+        const root = typeof block.getRootBlock === 'function' ? block.getRootBlock() : block;
+        return root && root.id ? root.id : blockId;
+    }
+
+    captureInverse (eve) {
+        // Only meaningful for events that mutate workspace state and support undo.
+        if (!eve || typeof eve.run !== 'function') return null;
+        return eve;
+    }
+
+    // ------------------------------------------------------------------
+    // Loop prevention.
+    //
+    // Whenever we programmatically replay a Blockly event -- because it came
+    // from a peer (parseEvent), or because we're rolling back a local edit
+    // that lost a conflict (revertLocalRootGroup) -- Blockly's internals may
+    // re-fire equivalent change events on our own listeners. Those must not
+    // be re-broadcast as if they were new local edits.
+    //
+    // A plain boolean flag around the replay is NOT safe here, for two
+    // reasons:
+    //   1) scratch-blocks batches change-listener notifications with an
+    //      internal setTimeout(0), so the echo can arrive on a *later* tick
+    //      than the one where we flip the flag back off -- a synchronous
+    //      try/finally would clear it too early and the echo would slip
+    //      through and get re-sent (possible feedback loop).
+    //   2) if anything inside the replay throws, a flag that's only reset
+    //      "at the end" of the happy path can get stuck "on" forever,
+    //      silently killing all future outgoing sync for this client. This
+    //      is what "stops syncing entirely" after a null-reference error.
+    //
+    // Blockly stamps a `group` id onto every event *at creation time*
+    // (Events.Abstract reads Events.getGroup() in its constructor), and that
+    // stamp survives however long it takes the event to reach our listener.
+    // So instead of a flag, we tag a fresh unique group for each replay,
+    // remember it, and filter on it whenever our listener fires -- which
+    // works regardless of timing. The group is auto-forgotten after a few
+    // seconds, so a thrown error can never wedge us permanently.
+    runSuppressed (fn) {
+        const groupId = `sync-${nid}-${++this.suppressCounter}`;
+        this.suppressedGroups.add(groupId);
+        setTimeout(() => this.suppressedGroups.delete(groupId), 4000);
+
+        const previousGroup = this.ScratchBlocks.Events.getGroup();
+        this.ScratchBlocks.Events.setGroup(groupId);
+        try {
+            fn();
+        } finally {
+            // Always restore, even if fn() threw -- never leaves replay mode "stuck on".
+            this.ScratchBlocks.Events.setGroup(previousGroup || false);
+        }
+    }
+
+    isSuppressedEcho (eve) {
+        return !!(eve && eve.group && this.suppressedGroups.has(eve.group));
+    }
+
+    // Field-change events can arrive with a blockId that hasn't propagated to
+    // this client yet (e.g. a field edited immediately after a block is
+    // dropped, before the create fully round-trips). As a fallback, senders
+    // also attach the field-block's parent id + position among its
+    // siblings, which is stable sooner than the block's own id. Only used
+    // when the direct id lookup fails.
+    resolveIncomingBlockId (event) {
+        if (!event || !event.blockId) return event && event.blockId;
+        if (this.workspace.getBlockById(event.blockId)) return event.blockId;
+
+        if (event.parentBlockId != null && event.childIndex != null) {
+            const parent = this.workspace.getBlockById(event.parentBlockId);
+            const child = parent && parent.childBlocks_ && parent.childBlocks_[event.childIndex];
+            if (child && child.id) return child.id;
+        }
+        return event.blockId;
+    }
+
+    revertLocalRootGroup (rootId) {
+        const versionInfo = this.rootVersions.get(rootId);
+        if (!versionInfo || !versionInfo.inverseEvents || versionInfo.inverseEvents.length === 0) {
+            return;
+        }
+    
+        console.log("CONFLICT: reverting local root group", rootId, versionInfo);
+    
+        this.runSuppressed(() => {
+            // Undo in reverse order, most-recent-first, mirroring undo-stack semantics.
+            for (let i = versionInfo.inverseEvents.length - 1; i >= 0; i--) {
+                const inv = versionInfo.inverseEvents[i];
+                try {
+                    inv.collabFlag = true;
+                    inv.run(false); // false = undo direction
+                } catch (e) {
+                    console.error("failed to revert inverse event", inv, e);
+                }
+            }
+        });
+    
+        this.rootVersions.delete(rootId);
+    }
+
+
 
     handleParentMessage (event) {
         if (!event || !event.data) return;
@@ -802,6 +926,59 @@ class Blocks extends React.Component {
 
     }
 
+    /**
+     * Read one s3-storage response into a version payload. A brand-new room (a 404
+     * "No versions found" body) and an unreadable object (the lambda substitutes the
+     * literal string 'EMT') both come back as null.
+     * @param {Response} response - the fetch response to read.
+     * @returns {?object} the version payload, or null if there is no version there.
+     */
+    async readVersionResponse(response) {
+        const text = await response.text();
+        let payload;
+        try {
+            payload = JSON.parse(text);
+        } catch (e) {
+            throw new Error("Unexpected response from s3-storage: " + text);
+        }
+        if (!payload || !payload.versionData || payload.versionData === 'EMT') {
+            return null;
+        }
+        return payload;
+    }
+
+    /**
+     * Resolve a single version of the project out of the bucket.
+     *
+     * The lambda walks its own history: `versionOffset` counts distinct saves back
+     * from the current one (0 = current, 1 = one save back, ...), skipping runs of
+     * identical-size versions so a stretch of no-op autosaves counts as one step. It
+     * clamps to the oldest save and reports the offset it actually reached.
+     *
+     * @param {number} offset - 0 for the current save, 1 for one save back, etc.
+     * @returns {object} {payload, offset}, where offset is the version actually
+     *     reached and payload is null only when the room has never been saved.
+     */
+    async fetchProjectVersion(offset) {
+        const response = await fetch(S3_STORAGE_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({key: inSpace, versionOffset: offset})
+        });
+
+        const payload = await this.readVersionResponse(response);
+        if (!payload) {
+            return {payload: null, offset: 0};
+        }
+
+        const reached = typeof payload.versionOffset === 'number' ?
+            payload.versionOffset :
+            offset;
+        return {payload: payload, offset: reached};
+    }
+
     async load() {
 
         if (this.startingLoad) {
@@ -812,87 +989,61 @@ class Blocks extends React.Component {
             this.startingLoad = true;
             this.stopEmission = true;
 
-            const datas = {
-                key: inSpace,
-                vid: this.vid,
-                keyMarker: this.keyMarker,
-                versionIdMarker: this.versionIdMarker,
+            const requestedOffset = getVersionOffset();
+            console.log("TOLOAD", {key: inSpace, versionOffset: requestedOffset})
+
+            const {payload, offset: loadedOffset} = await this.fetchProjectVersion(requestedOffset);
+
+            if (loadedOffset !== requestedOffset) {
+                // Asked for more history than exists - pin the UI to what we actually
+                // loaded. This re-enters load(), which no-ops on startingLoad.
+                setVersionOffset(loadedOffset);
             }
 
-            console.log("TOLOAD", datas)
-
-            //const decoder = 
-            const response = await fetch("https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/s3-storage",{
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(datas)
-            })
-            if (true) {
-                const reader = response.body.getReader();
-                const decoder = new TextDecoder('utf-8');
-                let chunks = [];
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) {
-                        break;
-                    }
-                    chunks.push(value);
-                }
-                const concatenated = new Uint8Array(chunks.reduce((acc, chunk) => acc.concat(Array.from(chunk)), []));
-                const jsonString = decoder.decode(concatenated);
-                if (jsonString == "{\"message\":\"No versions found\"}") {
-                    console.log("starting new project...")
-                } else {
-                    const jsonParsed = JSON.parse(jsonString);
-                    console.log("JSPARESE")
-                    this.keyMarker = jsonParsed.keyMarker;
-                    this.versionIdMarker = jsonParsed.versionIdMarker;
-
-                    const data = JSON.parse(jsonParsed.versionData);
-                    console.log(data)
-                    const targets = data.targets;
-                    let hasSeenStage = false;
-                    const targets2 = [...targets];
-                    for (let target of targets2) {
-                        
-                        
-                        if (target.isStage) {
-                            if (hasSeenStage) {
-                                const idx = targets.indexOf(target);
-                                targets.splice(idx, 1);
-                                console.log("removed", target)
-                                continue;
-                            }
-
-                            hasSeenStage = true;
-                        }
-
-                        const costumes = target.costumes;
-                        for (let costume of costumes) {
-                            // Normalize md5ext for older/incomplete saves instead of deleting costumes.
-                            if (!costume.hasOwnProperty("md5ext") || !costume.md5ext || costume.md5ext.includes("undefined")) {
-                                if (costume.assetId && costume.dataFormat) {
-                                    costume.md5ext = `${costume.assetId}.${costume.dataFormat}`;
-                                } else if (costume.md5) {
-                                    costume.md5ext = costume.md5.includes('.') ?
-                                        costume.md5 :
-                                        `${costume.md5}.${costume.dataFormat || 'svg'}`;
-                                }
-                            }
-                        }
-                    }
-                    const data2 = JSON.stringify(data);
-                    await this.props.vm.loadProject(data2);
-                }
+            if (!payload) {
+                console.log("starting new project...")
             } else {
-                const arrayBuffer = await response.arrayBuffer();
-                await this.props.vm.loadProject(arrayBuffer);
-            }
-            
-            if (sessionStorage.getItem('analMode') == "T") {
-                this.startingLoad = false;
+                const jsonParsed = payload;
+                console.log("JSPARESE")
+                this.keyMarker = jsonParsed.keyMarker;
+                this.versionIdMarker = jsonParsed.versionIdMarker;
+                this.loadedVersionId = jsonParsed.versionId;
+
+                const data = JSON.parse(jsonParsed.versionData);
+                console.log(data)
+                const targets = data.targets;
+                let hasSeenStage = false;
+                const targets2 = [...targets];
+                for (let target of targets2) {
+
+
+                    if (target.isStage) {
+                        if (hasSeenStage) {
+                            const idx = targets.indexOf(target);
+                            targets.splice(idx, 1);
+                            console.log("removed", target)
+                            continue;
+                        }
+
+                        hasSeenStage = true;
+                    }
+
+                    const costumes = target.costumes;
+                    for (let costume of costumes) {
+                        // Normalize md5ext for older/incomplete saves instead of deleting costumes.
+                        if (!costume.hasOwnProperty("md5ext") || !costume.md5ext || costume.md5ext.includes("undefined")) {
+                            if (costume.assetId && costume.dataFormat) {
+                                costume.md5ext = `${costume.assetId}.${costume.dataFormat}`;
+                            } else if (costume.md5) {
+                                costume.md5ext = costume.md5.includes('.') ?
+                                    costume.md5 :
+                                    `${costume.md5}.${costume.dataFormat || 'svg'}`;
+                            }
+                        }
+                    }
+                }
+                const data2 = JSON.stringify(data);
+                await this.props.vm.loadProject(data2);
             }
 
             //this.props.vm.editingTarget.setCostume(1);
@@ -908,6 +1059,9 @@ class Blocks extends React.Component {
         // this.props.vm.editingTarget = this.props.vm.runtime.getSpriteTargetByName("Apple");
         // this.props.vm.editingTarget = this.props.vm.runtime.getSpriteTargetByName("Taco");
 
+        // Always reset, success or failure, so a later load() call (e.g. a
+        // subsequent goodForLoad/analMode replay) isn't permanently blocked.
+        this.startingLoad = false;
         this.stopEmission = false;
         
     }
@@ -921,6 +1075,13 @@ class Blocks extends React.Component {
             return;
         }
 
+        // Saving while an older version is on screen would write that old project back
+        // over the current one, so history browsing is read-only.
+        if (getVersionOffset() > 0) {
+            console.log("viewing an older version; ignoring save")
+            return;
+        }
+
         if (!this.hasLoadedFully) {
             console.log("not loaded fully; trying to save. Ignoring.")
             return;
@@ -929,7 +1090,7 @@ class Blocks extends React.Component {
         const s = JSON.stringify(this.props.vm.toJSON())
         console.log("SAVED!!!")
         
-        await fetch('https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/s3-storage', {
+        await fetch(S3_STORAGE_URL, {
             method: 'POST',
             body: inSpace+"~|@^|@|~"+s
         });
@@ -979,11 +1140,23 @@ class Blocks extends React.Component {
     }
 
 
-    async sendInformation(eve) {
-
+    sendInformation (eve) {
 
         if (this.isViewOnly) {
-            console.log("view only mode; ignoring event")
+            return;
+        }
+
+        // Browsing history is local: the workspace holds an old project, so broadcasting
+        // its events would push that old state onto everyone else in the room.
+        if (getVersionOffset() > 0) {
+            return;
+        }
+
+        // Coarse suppression (full project load) or fine per-replay suppression
+        // (a remote event / conflict revert we just applied echoing back through
+        // our own change listener). See runSuppressed() for why this is safe
+        // against both async-deferred echoes and mid-replay exceptions.
+        if (this.stopEmission || this.isSuppressedEcho(eve)) {
             return;
         }
 
@@ -993,40 +1166,23 @@ class Blocks extends React.Component {
             }
         }
 
-        console.log("INFO INFO", eve)
-
-        let parentID = -1;
-        let childIDX = -1;
-
-        // handing field events since they don't have a consistent blockId
+        // Field-change events can reference a blockId that hasn't finished
+        // propagating to other clients yet. Attach the field-block's parent +
+        // sibling index as a fallback the receiver can use if a direct
+        // blockId lookup fails (see resolveIncomingBlockId). Computed and
+        // attached per-message, so a batch containing several different
+        // field edits resolves each one correctly on the far end.
+        let parentBlockId = null;
+        let childIndex = null;
         if (eve.element == "field") {
-            const parentBlock = this.workspace.getBlockById(eve.blockId).parentBlock_;
-            if (!!parentBlock) {
-                parentID = parentBlock.id;
-                for (let childBlock of parentBlock.childBlocks_) {
-                    if (childBlock.id == eve.blockId) {
-                        childIDX = parentBlock.childBlocks_.indexOf(childBlock);
-                    }
-                }
+            const fieldBlock = this.workspace.getBlockById(eve.blockId);
+            const parentBlock = fieldBlock && fieldBlock.parentBlock_;
+            if (parentBlock) {
+                parentBlockId = parentBlock.id;
+                childIndex = parentBlock.childBlocks_.indexOf(fieldBlock);
             }
         }
 
-        if (this.stopEmission) {
-            console.log("recieved own event;", this.pauseWorkspaceUpdate, this.lastBlockId, eve.blockId, this.lastBlockType, eve.type)
-            // debugger
-            if (this.lastBlockId == eve.blockId && this.lastBlockType == eve.type) {
-                this.stopEmission = false;
-                if (this.lastTempId != "") {
-                    // this.revertToOriginalTarget();
-                    // this.lastTempId = ""
-                }
-            }
-            return;
-        }
-        if (this.holdingBlock) {return;}
-        //console.log(eve.element, eve.recordUndo, eve.group, eve)
-        
-        console.log('loading', this.hasLoadedFully)
         if (this.hasLoadedFully) {
             this.logData({
                 moveId: this.getRandomHexString(16),
@@ -1039,23 +1195,35 @@ class Blocks extends React.Component {
             });
         }
 
-        // this is if an event happens while an event is being sent to the server;
-        // we queue the event to be sent after the current event is sent
-        // this is not correlated with the other this.queue system
-        let singleMessage = eve.toJson();
+        const nowTs = Date.now();
+        if (eve.blockId && this.workspace.getBlockById(eve.blockId)) {
+            const rootId = this.getRootBlockId(eve.blockId);
+            const existing = this.rootVersions.get(rootId);
+            const inverse = this.captureInverse(eve);
 
-        if (this.queueFurtherSends || this.queueWhileOnDifferentTarget) {
-            console.log("backlogged", singleMessage)
-            this.backlog.push(singleMessage);
-            return;
+            this.rootVersions.set(rootId, {
+                timestamp: nowTs,
+                inverseEvents: existing && existing.inverseEvents
+                    ? [...existing.inverseEvents, inverse].filter(Boolean)
+                    : [inverse].filter(Boolean),
+            });
         }
 
-        
-        // we queue the create event because it has to immediately be moved after
-        if (eve.type == "create" || eve.element == "click" || (eve.type == 'move' && eve.oldParentId)) {
-            console.log(singleMessage, eve.type == "create" ? "queueing create" : "queueing other");
-            this.queue.push(singleMessage);
+        let singleMessage;
+        try {
+            singleMessage = eve.toJson();
+        } catch (e) {
+            // If an event can't even be serialized there's nothing safe to send;
+            // drop just this one event rather than let the exception propagate
+            // and potentially interrupt Blockly's own change-listener loop.
+            console.error("failed to serialize local event, dropping it", eve, e);
             return;
+        }
+        singleMessage.ts = nowTs;
+
+        if (parentBlockId != null) {
+            singleMessage.parentBlockId = parentBlockId;
+            singleMessage.childIndex = childIndex;
         }
 
         if (eve.type == "change" && eve.name == "BROADCAST_OPTION") {
@@ -1068,186 +1236,209 @@ class Blocks extends React.Component {
         if (eve.type == "comment_create") {
             singleMessage.commentXY = eve.xy;
         }
-        
-        //console.log(this.queue, this.queue.length, "sending");
-        this.queue.push(singleMessage);
-        console.log('pushing to queue', singleMessage, eve)
-        //console.log(this.queue, this.queue.length, "sending");
-        
-        console.log('sending array of length: ', this.queue.length)
 
-        this.sendArray(this.queue, parentID, childIDX);
-
-        this.queue.length = 0;
-        
-        console.log("sending backlog:", this.backlog )
-
-        await this.sendBacklog(parentID, childIDX);
-
-        //this.save.bind(this)();
-        
+        this.queueOutgoing(singleMessage);
     }
 
-    async sendArray(arr, parentID=-1, childIDX=-1, dir=true) {
+    // Adds a message to the outgoing batch and schedules it to be flushed.
+    // Two timers govern the flush:
+    //   - flushTimer: a short "quiet period" debounce (cacheEventTime) that
+    //     resets on every new message, so closely-spaced events (e.g. a
+    //     block "create" immediately followed by its "move" into place) go
+    //     out together in one publish.
+    //   - maxWaitTimer: a hard ceiling (maxBatchWaitTime) started when the
+    //     batch first becomes non-empty and never reset, guaranteeing a
+    //     batch is flushed promptly even under a steady trickle of events
+    //     that would otherwise keep re-arming the debounce forever.
+    queueOutgoing (singleMessage) {
+        this.outgoingBatch.push(singleMessage);
 
-        // Add the new events to the queue
-        this.messageQueue.push(...arr);
+        if (!this.maxWaitTimer) {
+            this.maxWaitTimer = setTimeout(() => this.flushOutgoing(), this.maxBatchWaitTime);
+        }
+        clearTimeout(this.flushTimer);
+        this.flushTimer = setTimeout(() => this.flushOutgoing(), this.cacheEventTime);
+    }
 
-        // If a timer is already running, do nothing
-        if (this.timer) {
+    // Kept as a thin wrapper around queueOutgoing/flushOutgoing so any other
+    // caller expecting the old sendArray(arr, ...) signature keeps working.
+    sendArray (arr) {
+        for (const msg of arr) {
+            this.outgoingBatch.push(msg);
+        }
+        this.flushOutgoing();
+    }
+
+    async flushOutgoing () {
+        clearTimeout(this.flushTimer);
+        clearTimeout(this.maxWaitTimer);
+        this.flushTimer = null;
+        this.maxWaitTimer = null;
+
+        if (this.outgoingBatch.length === 0) {
             return;
         }
 
-        
-        this.timer = setTimeout(async () => {
-            // handing field events since they don't have a consistent blockId
-            if (parentID == -1) {
-                const eve = this.messageQueue[0];
-                if (eve.element == "field") {
-                    const parentBlock = this.workspace.getBlockById(eve.blockId).parentBlock_;
-                    if (!!parentBlock) {
-                        parentID = parentBlock.id;
-                        for (let childBlock of parentBlock.childBlocks_) {
-                            if (childBlock.id == eve.blockId) {
-                                childIDX = parentBlock.childBlocks_.indexOf(childBlock);
-                            }
-                        }
-                    }
-                }
-            }
+        const messages = this.outgoingBatch;
+        this.outgoingBatch = [];
 
-            const message = {
-                uid: nid,
-                target: this.props.vm.editingTarget.sprite.name,
-                messages: this.messageQueue,
-                parentID: parentID,
-                childIDX: childIDX,
-                rIDX: this.randomIndex,
-                dir: dir
-            };
+        const message = {
+            uid: nid,
+            target: this.props.vm.editingTarget.sprite.name,
+            messages: messages,
+            rIDX: this.randomIndex,
+            dir: true
+        };
 
-            console.log("sending array", message);
-            this.queueFurtherSends = true;
-            channel.publish('event', JSON.stringify(message));
-            this.queueFurtherSends = false;
-
-            // Clear the queue and timer
-            this.messageQueue = [];
-            this.timer = null;
-        }, this.cacheEventTime);
-    }
-
-    enableEmission() {
-        if (this.stopEmission) {
-            // this.stopEmission = false;
-            // console.log("stopped emission")
-            //console.log('rico', lastTempId)
-            //this.props.vm.setEditingTarget(lastTempId);
+        try {
+            await channel.publish('event', JSON.stringify(message));
+        } catch (e) {
+            // Never silently drop edits because a publish failed (offline blip,
+            // Ably hiccup, etc). Put them back at the front of the batch and
+            // retry shortly -- this is the fix for "sometimes it just doesn't
+            // send": the old code left its debounce timer permanently non-null
+            // after a thrown error here, which silently stopped ALL future
+            // sends for the rest of the session.
+            console.error("failed to publish sync event, will retry", e);
+            this.outgoingBatch = messages.concat(this.outgoingBatch);
+            this.maxWaitTimer = setTimeout(() => this.flushOutgoing(), 1000);
         }
     }
 
-    recieveInformation(message) {
-        
-        let data = JSON.parse(message.data);
-        console.log("data recieved", data)
+    recieveInformation (message) {
+
+        let data;
+        try {
+            data = JSON.parse(message.data);
+        } catch (e) {
+            console.error("received malformed sync message, ignoring", e);
+            return;
+        }
 
         if (data.uid == nid) {
-            console.log("discarding");
             return;
         }
 
-        // console.log(this.workspace.id)
-        
         this.randomIndex = data.rIDX;
         const targetName = data.target;
         const dir = data.dir;
 
-        this.changeTarget(targetName);
-
-        for (let message of data.messages) {
-
-            // this is for text entries; for some reason their IDs get changed when saved.
-            // so, it sends the index of the parent node (a normal block) and the index of the child node to extract the text entry box
-            if (data.parentID != -1) {
-                message.blockId = this.workspace.getBlockById(data.parentID).childBlocks_[data.childIDX].id;
+        // Applies the whole batch inside withTargetContext, which guarantees
+        // we end up back on the local user's own target -- and that the
+        // edits actually land -- no matter what happens while applying. See
+        // withTargetContext for the two failure modes this replaces.
+        this.withTargetContext(targetName, () => {
+            for (const msg of data.messages) {
+                this.parseEvent(msg, targetName, dir);
             }
-            this.parseEvent(message, targetName, dir);
-        }
-
-        console.log("finished parsing")
-
-        console.log("ACKTUALLY")
-        // this.enableWorkspaceUpdate();
-        // this.props.vm.editingTarget = ogTarget
-        // this.props.vm.runtime._editingTarget = this.props.vm.editingTarget;
-        // console.log("set to", this.props.vm.editingTarget.sprite.name)
-        // this.enableWorkspaceUpdate();
-    
+        });
     }
 
-    changeTarget(targetName, revertAutomatically = true) {
-        
-        if (targetName == this.props.vm.editingTarget.sprite.name) {return}
-        
-        var ogTarget
-        if (this.lastTempId != "") {
-            // if another target is already being edited, we have to revert to the original target of that target
-            ogTarget = this.props.vm.runtime.getTargetById(this.lastTempId);
-        } else {
-            // we create the original target
-            ogTarget = this.props.vm.editingTarget;
-            this.lastTempId = ogTarget.id;
+
+    // Temporarily points the workspace at `targetName` (a remote peer's
+    // sprite/stage), runs `applyFn`, then unconditionally restores the local
+    // user's own target -- serialized against any other pending swap, so two
+    // incoming batches for different sprites can never interleave.
+    //
+    // The old changeTarget()/revertToOriginalTarget() pair tracked "the
+    // target to go back to" (lastTempId) as shared mutable state and relied
+    // on a setTimeout(1) to trigger the revert later, decoupled from whether
+    // applying the incoming batch had actually finished. That meant:
+    //   - if two remote batches for different sprites arrived close
+    //     together, the second changeTarget() call would overwrite
+    //     lastTempId before the first's revert ran, and the user's own
+    //     target was never correctly restored -- i.e. they'd stay stuck
+    //     looking at a teammate's sprite.
+    // A naive fully-synchronous swap-apply-restore fixes that, but breaks
+    // something else: persisting the applied edits into tmpTarget's block
+    // model happens through vm.blockListener, which scratch-blocks notifies
+    // on a *deferred* tick (internally via setTimeout(0)). Restore back to
+    // the local target before that tick fires and the notification lands
+    // against the wrong (already-restored) target -- the edit is silently
+    // dropped. So we still yield briefly before restoring, but do it through
+    // a single chain (targetContextChain) instead of independent timers, so
+    // concurrent swaps queue up one-at-a-time rather than racing.
+    withTargetContext (targetName, applyFn) {
+        this.targetContextChain = this.targetContextChain
+            .then(() => this.applyWithTargetContext(targetName, applyFn))
+            .catch(e => console.error("error in target-context chain", e));
+        return this.targetContextChain;
+    }
+
+    async applyWithTargetContext (targetName, applyFn) {
+        if (!targetName || targetName == this.props.vm.editingTarget.sprite.name) {
+            try {
+                applyFn();
+            } catch (e) {
+                console.error("error applying remote events", e);
+            }
+            return;
         }
 
-        this.disableWorkspaceUpdate()
+        const originalTargetId = this.props.vm.editingTarget.id;
         const tmpTarget = this.getTargetByName(targetName);
+        if (!tmpTarget) {
+            // Target doesn't exist locally yet (e.g. a sprite-creation message
+            // hasn't arrived/applied yet) -- drop this batch rather than crash.
+            console.warn("remote target not found, dropping batch for", targetName);
+            return;
+        }
 
-        console.log(tmpTarget, "target")
-        this.props.vm.editingTarget = tmpTarget;
-        //this.disableWorkspaceUpdate()
-        
-        // this.props.vm.emitTargetsUpdate(false)
-        this.props.vm.emitWorkspaceUpdate();
-        // this.props.vm.emitTargetsUpdate(false)
-        // this.props.vm.runtime.setEditingTarget(this.props.vm.editingTarget);
-        this.props.vm.runtime._editingTarget = this.props.vm.editingTarget;
-        //console.log(">>" ,this.pauseWorkspaceUpdate)
-        // this.props.vm.setEditingTarget(tmpTarget.id);
+        this.disableWorkspaceUpdate();
+        try {
+            this.props.vm.editingTarget = tmpTarget;
+            this.props.vm.emitWorkspaceUpdate();
+            this.props.vm.runtime._editingTarget = tmpTarget;
 
-        if (revertAutomatically) {
-            setTimeout(() => {
-                if (!this.pauseWorkspaceUpdate) {return}
-                this.revertToOriginalTarget();
-            }, 1);
+            applyFn();
+
+            // Give scratch-blocks' deferred change-listener dispatch a chance
+            // to run (and thus vm.blockListener a chance to persist the edit
+            // into tmpTarget) while tmpTarget is still the active target.
+            await new Promise(resolve => setTimeout(resolve, 4));
+        } catch (e) {
+            console.error("error applying remote events", e);
+        } finally {
+            // Restore the user's own target. Order matters here: reload the
+            // workspace content back to their own blocks *while still
+            // hidden*, and only reveal the canvas once that's done --
+            // revealing first (what enableWorkspaceUpdate() + setEditingTarget()
+            // in that order would do) shows one visible frame of the other
+            // person's blocks in between. Un-pause before reloading (rather
+            // than after) so this setEditingTarget's onWorkspaceUpdate call
+            // does the *full* restore -- toolbox, workspace metrics,
+            // sessionStorage -- since, unlike the quiet swap-in above, this
+            // is a real switch back to what the user should be seeing.
+            this.pauseWorkspaceUpdate = false;
+            this.props.vm.setEditingTarget(originalTargetId);
+
+            // The reload call above returning doesn't guarantee the browser
+            // has actually *painted* the reloaded blocks yet -- Blockly's
+            // SVG rendering isn't necessarily fully settled in the same JS
+            // tick as the DOM mutation. Revealing immediately after could
+            // still catch a half-rendered or stale frame, which is what the
+            // remaining flicker was. Waiting two animation frames is the
+            // standard way to guarantee we're past that paint before we
+            // show it, without needing to know Blockly's exact internals.
+            await new Promise(resolve => {
+                requestAnimationFrame(() => requestAnimationFrame(resolve));
+            });
+
+            if (this.workspace && this.workspace.svgBlockCanvas_) {
+                this.workspace.svgBlockCanvas_.style.visibility = 'visible';
+            }
+            if (this.queueWorkspaceUpdate) {
+                this.queueWorkspaceUpdate = false;
+                this.props.vm.emitWorkspaceUpdate();
+            }
         }
     }
 
-    revertToOriginalTarget() {
-        setTimeout(async () => {
-            if (this.lastTempId == "") {
-                return
-            }
-            const ogTarget = this.props.vm.runtime.getTargetById(this.lastTempId);
-            if (ogTarget.id === this.props.vm.editingTarget.id) {
-                this.stopEmission = false
-                return
-            }
-            this.lastTempId = "";
-            // this.queueWhileOnDifferentTarget = false;
-            // this.queueFurtherSends = true;
-            // await this.sendBacklog();
-            // this.queueFurtherSends = false;
-            this.enableWorkspaceUpdate()
-            this.props.vm.setEditingTarget(ogTarget.id);
-            this.stopEmission = false;
-            console.log("OG TARGET SET")
-        }, 1);
-    }
+    parseEvent (event, targetName="", dir=true) {
 
-    parseEvent(event, targetName="", dir=true) {
-        // console.log(this.ScratchBlocks.Events.Abstract.workspaceId)
-        // console.log(this.workspace.id)
-        console.log('parsing!!', event)
+        // Resolve a possibly-stale field-event blockId via the parent+index
+        // fallback before doing anything else with it.
+        event.blockId = this.resolveIncomingBlockId(event);
 
         if (targetName == "") {
             targetName = this.props.vm.editingTarget.sprite.name;
@@ -1255,109 +1446,172 @@ class Blocks extends React.Component {
         if (event.type == "comment_change") {
             event.newValue = event.newContents
         }
-
-        // const ogTarget = this.props.vm.editingTarget;
-        // const tmpTarget = this.getTargetByName(targetName);
-
-        // this.props.vm.editingTarget = tmpTarget;
-        // this.props.vm.runtime._editingTarget = this.props.vm.editingTarget;
-        // this.props.vm.setEditingTarget(tmpTarget.id);
-        // this.disableWorkspaceUpdate();
-
+    
         if (this.workspace.getBlockById(event.blockId) == null && (event.type != "create")) {
             console.log(event, "discarded because block does not exist")
-            console.log(this.workspace)
-            // refresh page
-            // await channel.publish('preRefresh', "");
-            // await new Promise(r => setTimeout(r, 200));
-            // await this.load();
-            // this.revertToOriginalTarget();
             return;
         }
-
-        if (event.type == "create") {
-            this.holdingBlock = true;
-        } else if (event.type == "move") {
-            this.holdingBlock = false;
-            this.workspace.getBlockById(event.blockId).getSvgRoot().style.transition = "transform 0.5s";
+    
+        // Conflict check, root-block scoped. event.ts is the sender's local
+        // timestamp for this op (set in sendInformation above). If we have a
+        // local mutation on this same root group that's NEWER than the
+        // incoming event's timestamp, our local edit lost the race window
+        // (we sent ours, then this arrived). Per the agreed rule: incoming
+        // wins. Revert our local change first, then fall through to apply
+        // the incoming event normally.
+        if (event.blockId && typeof event.ts === 'number') {
+            const rootId = this.getRootBlockId(event.blockId);
+            const localVersion = this.rootVersions.get(rootId);
+    
+            if (localVersion && localVersion.timestamp > event.ts) {
+                console.log(
+                    "CONFLICT: local edit on root", rootId,
+                    "at", localVersion.timestamp,
+                    "is newer than incoming event at", event.ts,
+                    "— incoming wins, reverting local"
+                );
+                this.revertLocalRootGroup(rootId);
+                // continue below to apply the incoming event onto the now-reverted state
+            } else if (localVersion) {
+                // No conflict, incoming is newer/equal — incoming will be applied
+                // as the new authoritative state for this root below. Clear the
+                // stale local pending record so future incoming events for this
+                // root aren't spuriously compared against an op we've already
+                // lost the right to defend.
+                this.rootVersions.delete(rootId);
+            }
         }
-     
-        const eventInstance = this.ScratchBlocks.Events.fromJson(event, this.workspace);
 
+        if (event.type == "move") {
+            const movedBlock = this.workspace.getBlockById(event.blockId);
+            const svgRoot = movedBlock && typeof movedBlock.getSvgRoot === 'function' ? movedBlock.getSvgRoot() : null;
+            if (svgRoot) {
+                svgRoot.style.transition = "transform 0.5s";
+            }
+        }
+    
+        let eventInstance;
+        try {
+            eventInstance = this.ScratchBlocks.Events.fromJson(event, this.workspace);
+        } catch (e) {
+            console.error("failed to deserialize remote event, dropping it", event, e);
+            return;
+        }
+    
         if (event.type == "comment_create") {
             eventInstance.xy = event.commentXY
         }
 
-        try {
-
-            console.log("is have broadcast info", !!event.broadcastInfo, event.broadcastInfo)
-
-            // check if event is a create block (procedure) event
-            this.stopEmission = true;
-            let isProcedureDefinition = (eventInstance.type == "delete" && 
-                this.workspace.getBlockById(event.blockId).type == "procedures_definition");
-            if (eventInstance.type == "create" && event.xml.indexOf("mutation proccode") != -1) {
-                isProcedureDefinition = true;
+        // Deleting a block with blocks nested/attached inside it (inputs,
+        // C-block statements, or blocks stacked below) is transmitted as a
+        // single delete event for the top block -- scratch-blocks disables
+        // events for the recursive child disposal and only fires one event
+        // for the whole subtree (the same pattern this file's own
+        // domToBlock override uses for creation: build the whole subtree
+        // with events off, fire one BlockCreate at the end). Normally
+        // block.dispose() cascades through those same connections on the
+        // receiving end too, so this is just a safety net -- but capture
+        // the full subtree now, before anything is torn down, so we can
+        // verify afterward that all of it is actually gone.
+        let descendantIdsToVerify = null;
+        if (event.type == "delete") {
+            const blockToDelete = this.workspace.getBlockById(event.blockId);
+            if (blockToDelete && typeof blockToDelete.getDescendants === 'function') {
+                try {
+                    descendantIdsToVerify = blockToDelete.getDescendants(false).map(b => b.id);
+                } catch (e) {
+                    descendantIdsToVerify = null;
+                }
             }
-
-            // if event is a broadcast event, we have to manually run the block once more for some reason
-            if (!!event.broadcastInfo) {
-                console.log("WHAHAHAH")
-                const broadcastEvent = {isCloud: false, isLocal: false, type: "var_create", varId: event.broadcastInfo.broadcastId, varName: event.broadcastInfo.broadcastName, varType: "broadcast_msg"}
-                this.props.vm.blockListener(broadcastEvent)
-                const newEvent = this.ScratchBlocks.Events.fromJson(broadcastEvent, this.workspace);
-                newEvent.collabFlag = true
-                newEvent.run(dir);
-            }
-            
-            eventInstance.collabFlag = true
-            eventInstance.run(dir); // handles block
-            if (eventInstance.type == "ui") { 
-                this.props.vm.editingTarget.blocks.blocklyListen(eventInstance); //runs the block
-            } else {
-                this.lastBlockId = event.blockId;
-                this.lastBlockType = event.type;
-            }
-
-            // for create function events, we have to refresh workspace to show new functions
-            if (isProcedureDefinition) {
-                this.workspace.getToolbox().refreshSelection();
-            }
-        } catch (e) {
-            console.error(e);
         }
-        console.log("done")
 
-        // other non-ui events get reverted elsewhere
-        // if (eventInstance.type == "ui") {
-        //     this.revertToOriginalTarget()
-        // }
+        // Everything that actually mutates the workspace runs inside
+        // runSuppressed(), which guarantees (via try/finally on the Blockly
+        // event group) that our own change listener won't re-broadcast this
+        // as a new local edit -- and, critically, can never get stuck
+        // suppressing *future* real edits even if something below throws
+        // (e.g. a stale/missing block reference). This directly fixes the
+        // "stops syncing entirely after an error" failure mode.
+        this.runSuppressed(() => {
+            // A try/catch scoped to just this one event means a single bad or
+            // stale event (e.g. referencing a block that's already gone)
+            // can't abort the rest of the batch -- the caller's loop over
+            // data.messages keeps going, so one problem event degrades to a
+            // logged warning instead of desyncing everything after it.
+            try {
+                const existingBlock = this.workspace.getBlockById(event.blockId);
+                let isProcedureDefinition = (eventInstance.type == "delete" &&
+                    existingBlock && existingBlock.type == "procedures_definition");
+                if (eventInstance.type == "create" && event.xml && event.xml.indexOf("mutation proccode") != -1) {
+                    isProcedureDefinition = true;
+                }
 
-        // this.props.vm.editingTarget = ogTarget;
-        // this.props.vm.runtime._editingTarget = this.props.vm.editingTarget;
-        // this.enableWorkspaceUpdate();
-        
+                if (event.broadcastInfo) {
+                    const broadcastEvent = {isCloud: false, isLocal: false, type: "var_create", varId: event.broadcastInfo.broadcastId, varName: event.broadcastInfo.broadcastName, varType: "broadcast_msg"}
+                    this.props.vm.blockListener(broadcastEvent)
+                    const newEvent = this.ScratchBlocks.Events.fromJson(broadcastEvent, this.workspace);
+                    newEvent.run(dir);
+                }
+
+                eventInstance.run(dir);
+                if (eventInstance.type == "ui") {
+                    this.props.vm.editingTarget.blocks.blocklyListen(eventInstance);
+                }
+
+                // Safety net: if any block from the deleted subtree is
+                // somehow still around (getBlockById still finds it), finish
+                // the job explicitly rather than leaving orphaned blocks
+                // floating on this client only.
+                if (descendantIdsToVerify) {
+                    for (const leftoverId of descendantIdsToVerify) {
+                        if (leftoverId === event.blockId) continue; // handled by eventInstance.run above
+                        const leftover = this.workspace.getBlockById(leftoverId);
+                        if (leftover) {
+                            console.log("cascading delete: cleaning up orphaned nested block", leftoverId);
+                            try {
+                                leftover.dispose(false);
+                            } catch (e) {
+                                console.error("failed to dispose orphaned nested block", leftoverId, e);
+                            }
+                        }
+                    }
+                }
+
+                if (isProcedureDefinition && this.workspace.getToolbox()) {
+                    this.workspace.getToolbox().refreshSelection();
+                }
+
+                if (event.blockId && typeof event.ts === 'number') {
+                    const rootId = this.getRootBlockId(event.blockId);
+                    this.rootVersions.set(rootId, {
+                        timestamp: event.ts,
+                        inverseEvents: null, // remote-sourced; we don't own an inverse for it
+                    });
+                }
+            } catch (e) {
+                console.error("error applying remote event -- skipping it, sync continues", event, e);
+            }
+        });
     }
+
 
     disableWorkspaceUpdate() {
         console.log("DISABLED!!")
         this.pauseWorkspaceUpdate = true;
+        if (this.workspace && this.workspace.svgBlockCanvas_) {
+            this.workspace.svgBlockCanvas_.style.visibility = 'hidden';
+        }
     }
 
     enableWorkspaceUpdate() {
         console.log("ENABLED!!")
         this.pauseWorkspaceUpdate = false;
+        if (this.workspace && this.workspace.svgBlockCanvas_) {
+            this.workspace.svgBlockCanvas_.style.visibility = 'visible';
+        }
         if (this.queueWorkspaceUpdate) {
             this.queueWorkspaceUpdate = false;
             this.props.vm.emitWorkspaceUpdate();
-        }
-    }
-
-    async sendBacklog(parentID=-1, childIDX=-1) {
-        while (this.backlog.length > 0) {
-            const tmp = this.backlog;
-            this.backlog = [];
-            await this.sendArray(tmp, parentID, childIDX);
         }
     }
 
@@ -1370,6 +1624,10 @@ class Blocks extends React.Component {
             }
             oldEWU();
         }
+        this.sendChangeListener = (eve) => {
+            this.sendInformation(eve);
+        };
+        this.workspace.addChangeListener(this.sendChangeListener);
         this.workspace.addChangeListener(this.props.vm.blockListener);
         this.workspace.addChangeListener((eve) => {
             // console.log('forced',eve)
@@ -1764,24 +2022,18 @@ class Blocks extends React.Component {
 
         let ogAddCostume = this.props.vm.addCostume.bind(this.props.vm);
         this.props.vm.addCostume = function(md5, costumeObject, optTarget, optVersion) {
-            
-            console.log("ADDING COSTUME", md5, costumeObject, optTarget, optVersion)
-            
-            const as = costumeObject.asset;
-            console.log("ASSET", as)
+
             if (this.hasLoadedFully) {
 
                 if (costumeObject.asset == undefined) {
                     const spriteName = optTarget ? this.props.vm.runtime.getTargetById(optTarget).sprite.name : this.props.vm.editingTarget.sprite.name;
+                    // no asset locally either -> nothing heavy to strip, safe as-is
                     const msg = {md5: md5, costumeObject: costumeObject, spriteName: spriteName, optVersion: optVersion, uid:nid};
-
                     channel.publish('addCostume', JSON.stringify(msg))
                     return ogAddCostume(md5, costumeObject, optTarget, optVersion);
                 }
-                
-                var fileContent
-                var contentType
-                
+
+                var fileContent, contentType;
                 if (costumeObject.dataFormat === 'svg') {
                     fileContent = decodeSvg(costumeObject.asset.data);
                     contentType = 'image/svg+xml';
@@ -1800,35 +2052,31 @@ class Blocks extends React.Component {
                     },
                     body: fileContent,
                 }).then((resp) => {
-                    console.log(resp)
-
-                    console.log("data", costumeObject.asset.data)
-                    // costumeObject.asset.data = []
-
                     const spriteName = optTarget ? this.props.vm.runtime.getTargetById(optTarget).sprite.name : this.props.vm.editingTarget.sprite.name;
-                    const msg = {md5: md5, costumeObject: costumeObject, spriteName: spriteName, optVersion: optVersion, uid:nid};
-                    channel.publish('addCostume', JSON.stringify(msg))
+
+                    // Strip the raw pixel/svg data out of the broadcast payload.
+                    // It's already durably stored via the upload above (by md5),
+                    // so ogAddCostume on the receiving end can rehydrate it the
+                    // same way it would for the "no local asset" branch above.
+                    const {asset, ...costumeObjectMeta} = costumeObject;
+                    const msg = {md5: md5, costumeObject: costumeObjectMeta, spriteName: spriteName, optVersion: optVersion, uid: nid};
+                    channel.publish('addCostume', JSON.stringify(msg));
                 });
             }
             return ogAddCostume(md5, costumeObject, optTarget, optVersion);
         }.bind(this)
+
         channel.subscribe('addCostume', async (message) => {
             const d = JSON.parse(message.data);
             if (d.uid == nid) {return}
 
-            // const resp = await fetch("https://d3pl0tx5n82s71.cloudfront.net/"+d.md5)
-            // const extension = d.dataFormat
-            // if (extension == "svg") {
-            //     const svgString = await resp.text();
-            //     d.costumeObject.asset.data = svgString;
-            // } else {
-            //     const pngData = await resp.arrayBuffer();
-            //     d.costumeObject.asset.data = new Uint8Array(Buffer.from(pngData, 'base64'));
-            // }
-
             console.log("ADDING COSTUME", d)
             const targetId = this.getTargetByName(d.spriteName).id;
 
+            // d.costumeObject.asset is intentionally absent here — same code
+            // path as the "costumeObject.asset == undefined" case, which already
+            // works, and now resolves the image from the CDN/storage layer by md5
+            // instead of from an inline payload.
             ogAddCostume(d.md5, d.costumeObject, targetId, d.optVersion);
         })
 
@@ -2386,48 +2634,57 @@ class Blocks extends React.Component {
         }
     }
     onWorkspaceUpdate (data) {
-        
-        // When we change sprites, update the toolbox to have the new sprite's blocks
-        const toolboxXML = this.getToolboxXML();
-        if (toolboxXML) {
-            this.props.updateToolboxState(toolboxXML);
-        }
-        
-        if (this.props.vm.editingTarget && !this.props.workspaceMetrics.targets[this.props.vm.editingTarget.id]) {
-            this.onWorkspaceMetricsChange();
-        }
-        
-        console.log("moved to ", this.props.vm.editingTarget.sprite.name, "is transistonary:",this.pauseWorkspaceUpdate);
-        if (this.pauseWorkspaceUpdate) {
-            // this.queueWorkspaceUpdate = true;
-            // return;
-        } else {
+        // While pauseWorkspaceUpdate is set, this call is a private "peek" at
+        // another target's blocks during a remote-sync target swap (see
+        // withTargetContext), not a real UI-visible target switch. The
+        // toolbox/metrics dispatches below push state into Redux and can
+        // trigger a synchronous React re-render (Redux dispatches outside a
+        // React event handler aren't batched) -- only meaningful, and only
+        // safe, once we're actually showing the user's own target again.
+        // Letting these fire mid-peek was harmless when the peek window was
+        // ~1ms; widening it (needed elsewhere so a deferred blockListener
+        // notification has time to land) made a stray mid-swap re-render
+        // likely enough to race the swap-back and leave the workspace
+        // scrolled away from its blocks, looking empty.
+        if (!this.pauseWorkspaceUpdate) {
+            const toolboxXML = this.getToolboxXML();
+            if (toolboxXML) {
+                this.props.updateToolboxState(toolboxXML);
+            }
+
+            if (this.props.vm.editingTarget && !this.props.workspaceMetrics.targets[this.props.vm.editingTarget.id]) {
+                this.onWorkspaceMetricsChange();
+            }
+
             sessionStorage.setItem('editingTarget', this.props.vm.editingTarget.sprite.name);
         }
-        
-        // Remove and reattach the workspace listener (but allow flyout events)
+
         this.workspace.removeChangeListener(this.props.vm.blockListener);
+        this.workspace.removeChangeListener(this.sendChangeListener);
         const dom = this.ScratchBlocks.Xml.textToDom(data.xml);
+
+        // IMPORTANT: clear+load must always run as a pair, even during a
+        // temporary target swap (pauseWorkspaceUpdate === true), otherwise
+        // the overridden workspace.clear() below becomes a no-op and the
+        // newly-loaded XML gets stacked on top of the existing blocks,
+        // producing duplicate/corrupted blocks with colliding IDs.
+        const wasPaused = this.pauseWorkspaceUpdate;
+        this.pauseWorkspaceUpdate = false;
         try {
             this.ScratchBlocks.Xml.clearWorkspaceAndLoadFromXml(dom, this.workspace);
         } catch (error) {
-            // The workspace is likely incomplete. What did update should be
-            // functional.
-            //
-            // Instead of throwing the error, by logging it and continuing as
-            // normal lets the other workspace update processes complete in the
-            // gui and vm, which lets the vm run even if the workspace is
-            // incomplete. Throwing the error would keep things like setting the
-            // correct editing target from happening which can interfere with
-            // some blocks and processes in the vm.
             if (error.message) {
                 error.message = `Workspace Update Error: ${error.message}`;
             }
             log.error(error);
+        } finally {
+            this.pauseWorkspaceUpdate = wasPaused;
         }
-        this.workspace.addChangeListener(this.props.vm.blockListener);
 
-        if (this.props.vm.editingTarget && this.props.workspaceMetrics.targets[this.props.vm.editingTarget.id]) {
+        this.workspace.addChangeListener(this.props.vm.blockListener);
+        this.workspace.addChangeListener(this.sendChangeListener);
+
+        if (!this.pauseWorkspaceUpdate && this.props.vm.editingTarget && this.props.workspaceMetrics.targets[this.props.vm.editingTarget.id]) {
             const {scrollX, scrollY, scale} = this.props.workspaceMetrics.targets[this.props.vm.editingTarget.id];
             this.workspace.scrollX = scrollX;
             this.workspace.scrollY = scrollY;
@@ -2435,9 +2692,6 @@ class Blocks extends React.Component {
             this.workspace.resize();
         }
 
-        // Clear the undo state of the workspace since this is a
-        // fresh workspace and we don't want any changes made to another sprites
-        // workspace to be 'undone' here.
         this.workspace.clearUndo();
     }
     handleMonitorsUpdate (monitors) {

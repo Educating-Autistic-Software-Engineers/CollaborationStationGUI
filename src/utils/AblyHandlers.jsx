@@ -31,6 +31,11 @@ export const ablySpace = space && space.endsWith('_inner') ? space : `${space}_i
 export const name = urlParams.get('name').toString()
 export const cursorColor = urlParams.get('color').toString()
 
+// Optional `versionOffset` query arg (0 = current save, 1 = one save back, ...).
+// Re-exported here so all of the room's query args are discoverable in one place;
+// the live value and its subscribers live in versionOffset.js.
+export {versionOffsetEnabled, initialVersionOffset} from './versionOffset.js'
+
 export const ablyInstance = new Realtime.Promise({
     authUrl: "https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/ablyToken?name=" + name,
 });

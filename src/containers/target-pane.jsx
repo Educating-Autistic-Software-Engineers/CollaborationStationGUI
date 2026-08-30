@@ -199,6 +199,10 @@ class TargetPane extends React.Component {
             if (costume.dataFormat === 'svg') {
                 fileContent = this.decodeSvg(costume.asset.data);
                 contentType = 'image/svg+xml';
+            } else if (costume.dataFormat === 'jpg') {
+                jsonCostume.bitmapResolution = 2;
+                fileContent = this.decodePng(costume.asset.data);
+                contentType = 'image/jpeg';
             } else {
                 jsonCostume.bitmapResolution = 2;
                 fileContent = this.decodePng(costume.asset.data);

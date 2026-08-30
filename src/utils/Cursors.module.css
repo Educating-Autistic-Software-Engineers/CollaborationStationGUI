@@ -12,7 +12,9 @@
     font-size: 0.875rem;
     line-height: 1.25rem;
     color: #fff;
+    max-width: 200px;
     white-space: nowrap;
     pointer-events: none;
+    text-overflow: ellipsis;
 }
   
