@@ -1009,7 +1009,17 @@ class Blocks extends React.Component {
                 this.versionIdMarker = jsonParsed.versionIdMarker;
                 this.loadedVersionId = jsonParsed.versionId;
 
-                const data = JSON.parse(jsonParsed.versionData);
+                let data = JSON.parse(jsonParsed.versionData);
+                // vm.toJSON() returns a string, so the save payload is double-encoded.
+                // The lambda peels one layer, but a version written during the window
+                // where it didn't will still be a string after the first parse.
+                if (typeof data === 'string') {
+                    data = JSON.parse(data);
+                }
+                if (!data || !Array.isArray(data.targets)) {
+                    throw new Error('Stored project has no targets array: ' +
+                        JSON.stringify(jsonParsed.versionData).slice(0, 200));
+                }
                 console.log(data)
                 const targets = data.targets;
                 let hasSeenStage = false;
