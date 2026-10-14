@@ -115,9 +115,123 @@
 }
 
 .version-offset-label {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
     min-width: 4rem;
     text-align: center;
     font-size: 0.75rem;
+    line-height: 1.2;
+}
+
+/* When and by whom the version on screen was saved */
+.version-offset-meta {
+    font-size: 0.625rem;
+    opacity: 0.85;
+}
+
+.version-picker {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    z-index: $z-index-menu-bar;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-width: 15rem;
+    padding: 0.75rem;
+    border-radius: 0 0 0.5rem 0.5rem;
+    background-color: $ui-white;
+    color: $text-primary;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    font-size: 0.75rem;
+    white-space: normal;
+    user-select: text;
+}
+
+.version-picker-label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-weight: bold;
+}
+
+.version-picker-input {
+    padding: 0.25rem 0.375rem;
+    border: 1px solid $ui-black-transparent;
+    border-radius: 0.25rem;
+    color: $text-primary;
+    font: inherit;
+    font-weight: normal;
+}
+
+.version-picker-error {
+    color: $error-primary;
+}
+
+.version-picker-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.version-picker-primary,
+.version-picker-secondary {
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+    font: inherit;
+    cursor: pointer;
+}
+
+.version-picker-primary {
+    border: none;
+    background-color: $looks-secondary;
+    color: $ui-white;
+    font-weight: bold;
+}
+
+.version-picker-secondary {
+    border: 1px solid $ui-black-transparent;
+    background-color: transparent;
+    color: $text-primary;
+}
+
+/* Shown while a version is downloading or loading into the editor */
+.buffering-notice {
+    position: fixed;
+    top: calc($menu-bar-height + 0.5rem);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: $z-index-menu-bar;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    border-radius: 1rem;
+    background-color: $text-primary;
+    color: $ui-white;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    font-size: 0.75rem;
+    pointer-events: none;
+}
+
+.buffering-notice-error {
+    background-color: $error-primary;
+}
+
+.buffering-spinner {
+    width: 0.75rem;
+    height: 0.75rem;
+    border: 2px solid $ui-white-transparent;
+    border-top-color: $ui-white;
+    border-radius: 50%;
+    animation: buffering-spin 0.8s linear infinite;
+}
+
+@keyframes buffering-spin {
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .file-group {

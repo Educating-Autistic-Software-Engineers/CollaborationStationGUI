@@ -35,7 +35,18 @@ import Ably from 'ably';
 import { AblyProvider, useChannel, usePresence } from 'ably/react';
 import {nanoid} from 'nanoid';
 import {inSpace, ablySpace, ablyInstance, name} from "../utils/AblyHandlers.jsx";
-import {getVersionOffset, setVersionOffset, subscribeVersionOffset} from "../utils/versionOffset.js";
+import {getVersionOffset, setVersionOffset, subscribeVersionOffset, versionOffsetEnabled} from "../utils/versionOffset.js";
+import {
+    S3_STORAGE_URL,
+    getCurrentVersion,
+    getVersion,
+    invalidateVersionCache,
+    isVersionReady,
+    prefetchAround,
+    setBuffering,
+    setCurrentVersion,
+    setLoadError
+} from "../utils/versionHistory.js";
 import s3 from '../utils/S3DataFetcher.jsx';
 import AWS from 'aws-sdk';
 //import s3Client from "@aws-sdk/client-s3";
@@ -83,7 +94,6 @@ let hasInited = false;
 let flag1 = false;
 let flag2 = false;
 
-const S3_STORAGE_URL = "https://0dhyl8bktg.execute-api.us-east-2.amazonaws.com/scratchBlock/s3-storage";
 
 let stopEmission = false;
 
@@ -513,6 +523,8 @@ class Blocks extends React.Component {
             await channel.subscribe('newJoin', this.newUserJoined.bind(this))
             await channel.subscribe('categorySelected', this.parseCategorySelected)
             await channel.subscribe('goodForLoad', async (msg) => {
+                // Sent right after the sync owner saved, which shifted every history offset.
+                invalidateVersionCache();
                 const uid = JSON.parse(msg.data).uid;
                 if (uid == nid) {
                     return
@@ -926,65 +938,13 @@ class Blocks extends React.Component {
 
     }
 
-    /**
-     * Read one s3-storage response into a version payload. A brand-new room (a 404
-     * "No versions found" body) and an unreadable object (the lambda substitutes the
-     * literal string 'EMT') both come back as null.
-     * @param {Response} response - the fetch response to read.
-     * @returns {?object} the version payload, or null if there is no version there.
-     */
-    async readVersionResponse(response) {
-        const text = await response.text();
-        let payload;
-        try {
-            payload = JSON.parse(text);
-        } catch (e) {
-            throw new Error("Unexpected response from s3-storage: " + text);
-        }
-        if (!payload || !payload.versionData || payload.versionData === 'EMT') {
-            return null;
-        }
-        return payload;
-    }
-
-    /**
-     * Resolve a single version of the project out of the bucket.
-     *
-     * The lambda walks its own history: `versionOffset` counts distinct saves back
-     * from the current one (0 = current, 1 = one save back, ...), skipping runs of
-     * identical-size versions so a stretch of no-op autosaves counts as one step. It
-     * clamps to the oldest save and reports the offset it actually reached.
-     *
-     * @param {number} offset - 0 for the current save, 1 for one save back, etc.
-     * @returns {object} {payload, offset}, where offset is the version actually
-     *     reached and payload is null only when the room has never been saved.
-     */
-    async fetchProjectVersion(offset) {
-        const response = await fetch(S3_STORAGE_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({key: inSpace, versionOffset: offset})
-        });
-
-        const payload = await this.readVersionResponse(response);
-        if (!payload) {
-            return {payload: null, offset: 0};
-        }
-
-        const reached = typeof payload.versionOffset === 'number' ?
-            payload.versionOffset :
-            offset;
-        return {payload: payload, offset: reached};
-    }
-
     async load() {
 
         if (this.startingLoad) {
             return;
         }
 
+        let loadedOffset = null;
         try {
             this.startingLoad = true;
             this.stopEmission = true;
@@ -992,7 +952,14 @@ class Blocks extends React.Component {
             const requestedOffset = getVersionOffset();
             console.log("TOLOAD", {key: inSpace, versionOffset: requestedOffset})
 
-            const {payload, offset: loadedOffset} = await this.fetchProjectVersion(requestedOffset);
+            setBuffering({
+                stage: isVersionReady(requestedOffset) ? 'loading' : 'fetching',
+                offset: requestedOffset
+            });
+            const loaded = await getVersion(requestedOffset);
+            const {payload} = loaded;
+            loadedOffset = loaded.offset;
+            setBuffering({stage: 'loading', offset: loadedOffset});
 
             if (loadedOffset !== requestedOffset) {
                 // Asked for more history than exists - pin the UI to what we actually
@@ -1056,14 +1023,27 @@ class Blocks extends React.Component {
                 await this.props.vm.loadProject(data2);
             }
 
+            setCurrentVersion({payload, offset: loadedOffset});
+            if (versionOffsetEnabled) {
+                prefetchAround(loadedOffset);
+            }
+
             //this.props.vm.editingTarget.setCostume(1);
         } catch (error) {
-
-            console.log(error)
-
-            alert("Error loading project: " + JSON.stringify(error));
             console.error('Error fetching data from S3:', error);
-            this.errorLoading = true;
+
+            const onScreen = getCurrentVersion();
+            if (loadedOffset === null && onScreen) {
+                // Only the fetch of a history step failed, so the previous version is
+                // still intact on screen: point the offset back at it and report the
+                // failure in the menu bar rather than blocking with an alert.
+                const failedOffset = getVersionOffset();
+                setVersionOffset(onScreen.offset);
+                setLoadError(`Couldn't load ${failedOffset === 0 ? 'the current version' : `${failedOffset} back`}: ${error.message}`);
+            } else {
+                alert("Error loading project: " + (error && error.message ? error.message : JSON.stringify(error)));
+                this.errorLoading = true;
+            }
         }
 
         // this.props.vm.editingTarget = this.props.vm.runtime.getSpriteTargetByName("Apple");
@@ -1073,7 +1053,13 @@ class Blocks extends React.Component {
         // subsequent goodForLoad/analMode replay) isn't permanently blocked.
         this.startingLoad = false;
         this.stopEmission = false;
-        
+        setBuffering(null);
+
+        // The offset moved again while this load was in flight (load() no-ops while
+        // one is running), so catch up to it rather than leave the wrong version up.
+        if (loadedOffset !== null && getVersionOffset() !== loadedOffset) {
+            await this.load();
+        }
     }
 
     ret(){return 3;}
@@ -1100,10 +1086,12 @@ class Blocks extends React.Component {
         const s = JSON.stringify(this.props.vm.toJSON())
         console.log("SAVED!!!")
         
-        await fetch(S3_STORAGE_URL, {
+        await fetch(`${S3_STORAGE_URL}?author=${encodeURIComponent(name)}`, {
             method: 'POST',
             body: inSpace+"~|@^|@|~"+s
         });
+        // A new save shifts every history offset by one.
+        invalidateVersionCache();
 
         this.props.vm.renderer.requestSnapshot(async (dataURI) => {
             dataURI = dataURI.replace(/^data:image\/\w+;base64,/, '');
